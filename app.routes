@@ -1,3 +1,31 @@
-fn hello() {
-   "hello world!\ncurrent path is /" + path
+index() {
+   text(":3\nwelcome to the root")
+}
+
+hello() {
+   text("Hello World!")
+}
+
+test.json() {
+
+   let res = #{
+       hello: "world",
+       info: #{
+         path: path,
+         url: url,
+         ver: ver,
+         query: query,
+       }
+   };
+   
+   json(res)
+}
+
+test/loadfile() {
+   let file = open_file("test.html");
+   html(file.read_string())
+}
+
+* {
+   text("this is a wildcard route\ncurrently on: " + path)
 }
