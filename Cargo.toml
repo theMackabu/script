@@ -1,7 +1,10 @@
 [package]
-name = "httpin"
+name = "script"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+repository = "https://lab.themackabu.dev/self/script"
+description = "barebones http scripting"
 
 [dependencies]
 peg = "0.8.2"

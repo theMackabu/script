@@ -7,11 +7,11 @@ hello() {
 }
 
 example() {
-   html(get("https://example.org"))
+   html(http::get("https://example.org"))
 }
 
 example/json() {
-   json(get("https://httpbin.org/json"))
+   text(http::get("https://httpbin.org//json"))
 }
 
 test.json() {
