@@ -16,10 +16,10 @@ use actix_web::{get, http::header::ContentType, http::StatusCode, web::Path, App
 lazy_static! {
     static ref R_INDEX: Result<Regex, Error> = Regex::new(r"index\s*\{");
     static ref R_ERR: Result<Regex, Error> = Regex::new(r"(\b\d{3})\s*\{");
-    static ref R_DOT: Result<Regex, Error> = Regex::new(r"\.(\w+)\(\)\s*\{");
     static ref R_FN: Result<Regex, Error> = Regex::new(r"(\w+)\((.*?)\)\s*\{");
+    static ref R_DOT: Result<Regex, Error> = Regex::new(r"\.(\w+)\((.*?)\)\s*\{");
     static ref R_WILD: Result<Regex, Error> = Regex::new(r"\*\s*\{|wildcard\s*\{");
-    static ref R_SLASH: Result<Regex, Error> = Regex::new(r"(?<=[a-zA-Z])/(?=[a-zA-Z])");
+    static ref R_SLASH: Result<Regex, Error> = Regex::new(r"(?m)\/(?=.*\((.*?)\)\s*\{[^{]*$)");
 }
 
 fn rm_first(s: &str) -> &str {
@@ -269,8 +269,6 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
 
         ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard(err) {").to_string(), result)
     };
-
-    println!("{contents}");
 
     let mut ast = match engine.compile(contents) {
         Ok(ast) => ast,
