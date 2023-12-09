@@ -1,0 +1,17 @@
+# src
+build
+target
+tests
+bin
+
+# maid
+.maid/cache
+.maid/temp
+.maid/server.toml
+
+# environment variables
+.env
+.env.production
+
+# backup
+.bak

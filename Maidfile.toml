@@ -1,0 +1,18 @@
+[project]
+name = "httpin"
+version = "0.1.0"
+
+[tasks]
+clean = { script = ["rm -rf bin", "mkdir bin"] }
+run = { script = ["maid build -q", "./bin/httpin"] }
+
+[tasks.build]
+depends = ["clean"]
+script = [
+   "cargo zigbuild --release", 
+   "cp target/release/httpin bin/httpin"
+]
+
+[tasks.build.cache]
+path = "src"
+target = ["bin/httpin"]

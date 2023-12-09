@@ -1,0 +1,3 @@
+fn hello() {
+   "hello world!\ncurrent path is /" + path
+}
