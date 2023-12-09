@@ -1,6 +1,6 @@
 use fancy_regex::{Captures, Error, Regex};
 use lazy_static::lazy_static;
-use macros_rs::{crashln, ternary};
+use macros_rs::{crashln, string, ternary};
 use reqwest::blocking::Client;
 use std::{fs, path::PathBuf};
 
@@ -71,19 +71,99 @@ mod status {
 
 #[export_module]
 mod http {
-    pub fn get(url: String) -> String {
+    #[derive(Debug, Clone)]
+    pub struct Http {
+        pub length: Option<u64>,
+        pub status: u16,
+        pub err: Option<String>,
+        pub body: Option<String>,
+    }
+
+    pub fn get(url: String) -> Http {
         let client = Client::new();
-        let response = match client.get(url).send() {
+        let response =
+            match client.get(url).send() {
+                Ok(res) => res,
+                Err(err) => {
+                    return Http {
+                        length: Some(0),
+                        status: 0,
+                        err: Some(err.to_string()),
+                        body: None,
+                    }
+                }
+            };
+
+        if response.status().is_success() {
+            Http {
+                length: response.content_length(),
+                status: response.status().as_u16(),
+                err: None,
+                body: Some(response.text().unwrap()),
+            }
+        } else {
+            Http {
+                length: response.content_length(),
+                status: response.status().as_u16(),
+                err: Some(response.text().unwrap()),
+                body: None,
+            }
+        }
+    }
+
+    pub fn post(url: String, data: Map) -> Http {
+        let client = Client::new();
+
+        let data =
+            match serde_json::to_string(&data) {
+                Ok(result) => result,
+                Err(err) => err.to_string(),
+            };
+
+        let response = match client.post(url).body(data).send() {
             Ok(res) => res,
-            Err(err) => return err.to_string(),
+            Err(err) => {
+                return Http {
+                    length: Some(0),
+                    status: 0,
+                    err: Some(err.to_string()),
+                    body: None,
+                }
+            }
         };
 
         if response.status().is_success() {
-            response.text().unwrap()
+            Http {
+                length: response.content_length(),
+                status: response.status().as_u16(),
+                err: None,
+                body: Some(response.text().unwrap()),
+            }
         } else {
-            format!("request failed with status code: {}", response.status())
+            Http {
+                length: response.content_length(),
+                status: response.status().as_u16(),
+                err: Some(response.text().unwrap()),
+                body: None,
+            }
         }
     }
+
+    // add err handling
+    #[rhai_fn(get = "json")]
+    pub fn json(res: Http) -> Map { serde_json::from_str(&res.body.unwrap()).unwrap() }
+
+    #[rhai_fn(get = "status")]
+    pub fn status(res: Http) -> i64 { res.status as i64 }
+
+    #[rhai_fn(get = "length")]
+    pub fn length(res: Http) -> i64 { res.length.unwrap() as i64 }
+
+    #[rhai_fn(get = "body")]
+    pub fn body(res: Http) -> String { res.body.unwrap_or(string!("")) }
+
+    #[rhai_fn(get = "error")]
+    pub fn error(res: Http) -> String { res.err.unwrap_or(string!("")) }
 }
 
 #[get("{url:.*}")]
@@ -168,6 +248,8 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
             }
         }
     };
+
+    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
 
     HttpResponse::build(status_code).content_type(content_type).body(body)
 }
