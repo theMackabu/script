@@ -1,10 +1,12 @@
 use fancy_regex::{Captures, Error, Regex};
 use lazy_static::lazy_static;
-use macros_rs::{crashln, string, ternary};
+use macros_rs::{crashln, str, string, ternary};
 use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use smartstring::alias::String as SmString;
 use std::{fs, path::PathBuf};
 
-use rhai::{packages::Package, plugin::*, Engine, FnNamespace, Map, ParseError, Scope, AST};
+use rhai::{packages::Package, plugin::*, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
 use rhai_fs::FilesystemPackage;
 use rhai_url::UrlPackage;
 
@@ -71,12 +73,31 @@ mod status {
 
 #[export_module]
 mod http {
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Http {
         pub length: Option<u64>,
         pub status: u16,
         pub err: Option<String>,
         pub body: Option<String>,
+    }
+
+    impl From<Http> for Map {
+        fn from(http: Http) -> Self {
+            let mut map = Map::new();
+            map.insert(SmString::from("status"), Dynamic::from(http.status as i64));
+
+            if let Some(length) = http.length {
+                map.insert(SmString::from("length"), Dynamic::from(length as i64));
+            }
+            if let Some(err) = http.err {
+                map.insert(SmString::from("err"), Dynamic::from(err));
+            }
+            if let Some(body) = http.body {
+                map.insert(SmString::from("body"), Dynamic::from(body));
+            }
+
+            return map;
+        }
     }
 
     pub fn get(url: String) -> Http {
@@ -149,21 +170,48 @@ mod http {
         }
     }
 
-    // add err handling
-    #[rhai_fn(get = "json")]
-    pub fn json(res: Http) -> Map { serde_json::from_str(&res.body.unwrap()).unwrap() }
-
     #[rhai_fn(get = "status")]
     pub fn status(res: Http) -> i64 { res.status as i64 }
 
+    #[rhai_fn(global, pure, return_raw, name = "raw")]
+    pub fn raw(res: &mut Http) -> Result<Map, Box<EvalAltResult>> { Ok(res.clone().into()) }
+
     #[rhai_fn(get = "length")]
-    pub fn length(res: Http) -> i64 { res.length.unwrap() as i64 }
+    pub fn length(res: Http) -> i64 {
+        match res.length {
+            Some(len) => len as i64,
+            None => 0,
+        }
+    }
 
-    #[rhai_fn(get = "body")]
-    pub fn body(res: Http) -> String { res.body.unwrap_or(string!("")) }
+    #[rhai_fn(get = "body", return_raw)]
+    pub fn body(res: Http) -> Result<String, Box<EvalAltResult>> {
+        match res.body {
+            Some(body) => Ok(body.to_string()),
+            None => Ok(string!("")),
+        }
+    }
 
-    #[rhai_fn(get = "error")]
-    pub fn error(res: Http) -> String { res.err.unwrap_or(string!("")) }
+    #[rhai_fn(global, pure, return_raw, name = "json")]
+    pub fn json(res: &mut Http) -> Result<Map, Box<EvalAltResult>> {
+        let body = str!(res.body.clone().unwrap());
+        match serde_json::from_str(body) {
+            Ok(map) => Ok(map),
+            Err(err) => Err(format!("{}", &err).into()),
+        }
+    }
+
+    #[rhai_fn(get = "error", return_raw)]
+    pub fn error(res: Http) -> Result<Map, Box<EvalAltResult>> {
+        let err = match res.err {
+            Some(err) => format!("\"{err}\""),
+            None => string!("null"),
+        };
+        match serde_json::from_str(&format!("{{\"message\":{err}}}")) {
+            Ok(msg) => Ok(msg),
+            Err(err) => Err(format!("{}", &err).into()),
+        }
+    }
 }
 
 #[get("{url:.*}")]

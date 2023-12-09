@@ -1315,6 +1315,7 @@ dependencies = [
  "rhai-url",
  "serde",
  "serde_json",
+ "smartstring",
  "termcolor",
 ]
 

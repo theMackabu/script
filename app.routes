@@ -13,13 +13,13 @@ example() {
 example/json() {
    let res = http::get("https://httpbin.org//json");
    let body = #{ 
-      response: res.json,
+      response: res.json(),
       info: #{
          length: res.length,
          status: res.status,
          error: res.error,
          body: res.body,
-      }
+      },
    };
    
    json(body)
@@ -31,7 +31,7 @@ example/post() {
       url: url,
    };
    
-   json(http::post("https://httpbin.org//post", body).json)
+   json(http::post("https://httpbin.org//post", body).raw())
 }
 
 test.json() {

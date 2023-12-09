@@ -19,3 +19,4 @@ fancy-regex = "0.12.0"
 serde = { version = "1.0.193", features = ["derive"] }
 reqwest = { version = "0.11.22", features = ["blocking"] }
 rhai = { version = "1.16.3", features = ["serde_json", "serde"] }
+smartstring = "1.0.1"
