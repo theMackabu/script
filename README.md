@@ -6,7 +6,7 @@ Define routes on runtime and execute scripts associated with each route. The ser
 
 ## Usage
 
-````rust
+```rust
 // the index route
 index {
    text(":3\nwelcome to the root")
@@ -25,11 +25,10 @@ get() {
 
 For more syntax, check out `app.routes`
 
-
 ```bash
 # Start the server
 script start <filename>
-````
+```
 
 For more commands, check out `script --help`
 
