@@ -11,12 +11,12 @@ example() {
    html(http::get("https://example.org").body)
 }
 
-#[route("/example/{id}")]
+#[route("/example/{id}.txt")]
 example(id) {
    text("base: " + id)
 }
 
-#[route("/example/{id}/test.json")]
+#[route("/example/{id}/test")]
 example_test(id) {
    text("sub: " + id)
 }
@@ -75,5 +75,5 @@ test/loadfile() {
 }
 
 404 {
-   text("404 page\n\n")
+   text("404 page")
 }

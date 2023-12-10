@@ -72,13 +72,14 @@ fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option
 
     for (route_segment, url_segment) in route_segments.iter().zip(url_segments.iter()) {
         if let Some(placeholder_value) = match_segment(route_segment, url_segment, placeholders) {
-            matched_placeholders.push(placeholder_value);
+            if !placeholder_value.is_empty() {
+                matched_placeholders.push(placeholder_value);
+            }
         } else {
             return None;
         }
     }
 
-    matched_placeholders.retain(|x| x != "");
     Some(matched_placeholders)
 }
 
@@ -93,7 +94,13 @@ fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) 
     } else if route_segment == url_segment {
         Some("".to_string())
     } else {
-        None
+        let route_parts: Vec<&str> = route_segment.split('.').collect();
+        let url_parts: Vec<&str> = url_segment.split('.').collect();
+        if route_parts.len() == url_parts.len() && route_parts.last() == url_parts.last() {
+            match_segment(route_parts[0], url_parts[0], placeholders)
+        } else {
+            None
+        }
     }
 }
 
@@ -427,6 +434,8 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
         }
     };
 
+    let status_code = ternary!(has_wildcard, status_code, StatusCode::NOT_FOUND);
+    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
     return HttpResponse::build(status_code).content_type(content_type).body(body);
 }
 
