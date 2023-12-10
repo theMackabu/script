@@ -4,7 +4,7 @@ use macros_rs::{crashln, str, string, ternary};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use smartstring::alias::String as SmString;
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use rhai::{packages::Package, plugin::*, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
 use rhai_fs::FilesystemPackage;
@@ -29,10 +29,12 @@ fn rm_first(s: &str) -> &str {
 }
 
 fn convert_to_format(input: &str) -> String {
-    Regex::new(r"\.(\w+)")
-        .unwrap()
-        .replace_all(&input.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
-        .to_string()
+    format!(
+        "_route_{}",
+        Regex::new(r"\.(\w+)")
+            .unwrap()
+            .replace_all(&input.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
+    )
 }
 
 fn convert_status(code: i64) -> StatusCode {
@@ -220,6 +222,8 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
         return HttpResponse::Ok().body("");
     }
 
+    let mut routes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
     let filename: PathBuf = "app.routes".into();
     let fs_pkg = FilesystemPackage::new();
     let url_pkg = UrlPackage::new();
@@ -229,7 +233,7 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
     let mut scope = Scope::new();
 
     let path = match url.as_str() {
-        "" => "_index".to_string(),
+        "" => "_route_index".to_string(),
         _ => convert_to_format(&url.clone()),
     };
 
@@ -258,46 +262,106 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
 
     let has_error_page = R_ERR.as_ref().unwrap().is_match(&contents).unwrap();
     let has_wildcard = R_WILD.as_ref().unwrap().is_match(&contents).unwrap();
+    let has_index = R_INDEX.as_ref().unwrap().is_match(&contents).unwrap();
+
+    let contents = {
+        let pattern = r#"\{([^{}\s]+)\}"#;
+        let pattern_combine = r#"(?m)^_route/(.*)\n(.*?)\((.*?)\)"#;
+
+        let re = Regex::new(pattern).unwrap();
+        let re_combine = Regex::new(pattern_combine).unwrap();
+
+        let result =
+            re.replace_all(&contents, |captures: &fancy_regex::Captures| {
+                let content = captures.get(1).map_or("", |m| m.as_str());
+                format!("_arg_{content}")
+            });
+
+        let output = result.replace("#[route(\"", "_route").replace("\")]", "");
+
+        re_combine.replace_all(str!(output), |captures: &fancy_regex::Captures| {
+            let path = captures.get(1).map_or("", |m| m.as_str());
+            let args = captures.get(3).map_or("", |m| m.as_str());
+
+            if args != "" {
+                routes.insert(string!(path.replace("_arg_", "%")), args.split(",").map(|s| s.to_string()).collect());
+                format!("fmt_{path}({args})")
+            } else {
+                routes.insert(string!(path), vec![]);
+                format!("{path}()")
+            }
+        })
+    };
 
     // cache contents until file change
     let contents = {
         let result = R_SLASH.as_ref().unwrap().replace_all(&contents, "_").to_string();
-        let result = R_INDEX.as_ref().unwrap().replace_all(&result, "_index() {").to_string();
-        let result = R_ERR.as_ref().unwrap().replace_all(&result, "_error_$1(err) {").to_string();
-        let result = R_DOT.as_ref().unwrap().replace_all(&result, |captures: &Captures| format!("__d{}", rm_first(&captures[0]))).to_string();
-        let result = R_FN.as_ref().unwrap().replace_all(&result, |captures: &Captures| format!("fn {}", &captures[0])).to_string();
+        let result = R_INDEX.as_ref().unwrap().replace_all(&result, "index() {").to_string();
+        let result = R_ERR.as_ref().unwrap().replace_all(&result, "error_$1() {").to_string();
 
-        ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard(err) {").to_string(), result)
+        let pattern_route = r#"(?m)^(?!_error)(?!_wildcard)(?!_index)(?!fmt_)(.*?)\((.*?)\)\s*\{"#;
+        let re_route = Regex::new(pattern_route).unwrap();
+
+        for captures in re_route.captures_iter(&contents) {
+            let path = captures.unwrap().get(1).map_or("", |m| m.as_str());
+            routes.insert(string!(path.replace("_", "/")), vec![]);
+        }
+
+        let result = R_DOT.as_ref().unwrap().replace_all(&result, |captures: &Captures| format!("__d{}", rm_first(&captures[0]))).to_string();
+        let result = R_FN.as_ref().unwrap().replace_all(&result, |captures: &Captures| format!("fn _route_{}", &captures[0])).to_string();
+
+        ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard() {").to_string(), result)
     };
 
-    let mut ast = match engine.compile(contents) {
+    let mut ast = match engine.compile(&contents) {
         Ok(ast) => ast,
         Err(err) => error(&engine, &path, err),
     };
 
     ast.set_source(filename.to_string_lossy().to_string());
 
-    let (body, content_type, status_code) = match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, &path, ()) {
-        Ok(response) => response,
-        Err(err) => {
-            if has_wildcard || has_error_page {
-                engine
-                    .call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, ternary!(has_wildcard, "_wildcard", "_error_404"), (err.to_string(),))
-                    .unwrap()
-            } else {
-                eprintln!("Error reading script file: {}\n{}", filename.to_string_lossy(), err);
-                (
-                    format!("function not found.\ndid you create {url}()?\n\nyou can add * {{}} or 404 {{}} routes as well."),
-                    ContentType::plaintext(),
-                    StatusCode::NOT_FOUND,
-                )
+    println!("{:?}", routes);
+    // println!("{}", contents);
+
+    if url.clone() == "" && has_index {
+        let (body, content_type, status_code) = engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, "_route_index", ()).unwrap();
+        println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
+        return HttpResponse::build(status_code).content_type(content_type).body(body);
+    };
+
+    for (route, args) in routes {
+        let url = url.clone();
+
+        if url == route {
+            match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, convert_to_format(&url.clone()), ()) {
+                Ok(response) => {
+                    let (body, content_type, status_code) = response;
+                    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
+                    return HttpResponse::build(status_code).content_type(content_type).body(body);
+                }
+                Err(err) => {
+                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Internal Server Error\n\n{err}"));
+                }
             }
+        }
+    }
+
+    let (body, content_type, status_code) = {
+        if has_wildcard || has_error_page {
+            engine
+                .call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, ternary!(has_wildcard, "_wildcard", "_route_error_404"), ())
+                .unwrap()
+        } else {
+            eprintln!("Error reading script file: {}", filename.to_string_lossy());
+            (
+                format!("function not found.\ndid you create {url}()?\n\nyou can add * {{}} or 404 {{}} routes as well."),
+                ContentType::plaintext(),
+                StatusCode::NOT_FOUND,
+            )
         }
     };
 
-    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
-
-    HttpResponse::build(status_code).content_type(content_type).body(body)
+    return HttpResponse::build(status_code).content_type(content_type).body(body);
 }
 
 #[actix_web::main]
