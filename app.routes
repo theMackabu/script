@@ -16,14 +16,14 @@ example(id) {
    text("base: " + id)
 }
 
-#[route("/example/{id}/test")]
+#[route("/example/{id}/test.json")]
 example_test(id) {
    text("sub: " + id)
 }
 
 #[route("/name/{id}/{name}")]
 name(id, name) {
-   text(id + name)
+   json(#{name: name, id: id})
 }
 
 example/json() {

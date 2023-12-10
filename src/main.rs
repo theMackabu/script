@@ -35,12 +35,17 @@ fn convert_to_format(input: &str) -> String {
 
 fn route_to_fn(input: &str) -> String {
     let re = Regex::new(r#"\{([^{}\s]+)\}"#).unwrap();
+    let re_dot = Regex::new(r"\.(\w+)").unwrap();
+
     let result = re.replace_all(&input, |captures: &fancy_regex::Captures| {
         let content = captures.get(1).map_or("", |m| m.as_str());
         format!("_arg_{content}")
     });
 
-    format!("_route_fmt_{}", &result.replace("/", "_"))
+    format!(
+        "_route_fmt_{}",
+        re_dot.replace_all(&result.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
+    )
 }
 
 fn convert_status(code: i64) -> StatusCode {
@@ -55,29 +60,40 @@ fn error(engine: &Engine, path: &str, err: ParseError) -> AST {
     }
 }
 
-fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> bool {
+fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option<Vec<String>> {
+    let mut matched_placeholders = Vec::new();
+
     let route_segments: Vec<&str> = route_template.split('/').collect();
     let url_segments: Vec<&str> = url.split('/').collect();
 
     if route_segments.len() != url_segments.len() {
-        return false;
+        return None;
     }
 
     for (route_segment, url_segment) in route_segments.iter().zip(url_segments.iter()) {
-        if !match_segment(route_segment, url_segment, placeholders) {
-            return false;
+        if let Some(placeholder_value) = match_segment(route_segment, url_segment, placeholders) {
+            matched_placeholders.push(placeholder_value);
+        } else {
+            return None;
         }
     }
 
-    true
+    matched_placeholders.retain(|x| x != "");
+    Some(matched_placeholders)
 }
 
-fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) -> bool {
+fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) -> Option<String> {
     if route_segment.starts_with('{') && route_segment.ends_with('}') {
         let placeholder = &route_segment[1..route_segment.len() - 1];
-        placeholders.contains(&placeholder)
+        if placeholders.contains(&placeholder) {
+            Some(url_segment.to_string())
+        } else {
+            None
+        }
+    } else if route_segment == url_segment {
+        Some("".to_string())
     } else {
-        route_segment == url_segment
+        None
     }
 }
 
@@ -381,8 +397,8 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
             }
         }
 
-        if match_route(&route, &args, &url) {
-            match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, route_to_fn(&route), ()) {
+        match match_route(&route, &args, &url) {
+            Some(data) => match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, route_to_fn(&route), data) {
                 Ok(response) => {
                     let (body, content_type, status_code) = response;
                     println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
@@ -391,7 +407,8 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
                 Err(err) => {
                     return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Internal Server Error\n\n{err}"));
                 }
-            }
+            },
+            None => {}
         }
     }
 
