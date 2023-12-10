@@ -29,12 +29,18 @@ fn rm_first(s: &str) -> &str {
 }
 
 fn convert_to_format(input: &str) -> String {
-    format!(
-        "_route_{}",
-        Regex::new(r"\.(\w+)")
-            .unwrap()
-            .replace_all(&input.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
-    )
+    let re = Regex::new(r"\.(\w+)").unwrap();
+    format!("_route_{}", re.replace_all(&input.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0]))))
+}
+
+fn route_to_fn(input: &str) -> String {
+    let re = Regex::new(r#"\{([^{}\s]+)\}"#).unwrap();
+    let result = re.replace_all(&input, |captures: &fancy_regex::Captures| {
+        let content = captures.get(1).map_or("", |m| m.as_str());
+        format!("_arg_{content}")
+    });
+
+    format!("_route_fmt_{}", &result.replace("/", "_"))
 }
 
 fn convert_status(code: i64) -> StatusCode {
@@ -46,6 +52,32 @@ fn error(engine: &Engine, path: &str, err: ParseError) -> AST {
     match engine.compile(format!("fn {path}(){{text(\"error reading script file: {err}\")}}")) {
         Ok(ast) => ast,
         Err(_) => Default::default(),
+    }
+}
+
+fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> bool {
+    let route_segments: Vec<&str> = route_template.split('/').collect();
+    let url_segments: Vec<&str> = url.split('/').collect();
+
+    if route_segments.len() != url_segments.len() {
+        return false;
+    }
+
+    for (route_segment, url_segment) in route_segments.iter().zip(url_segments.iter()) {
+        if !match_segment(route_segment, url_segment, placeholders) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) -> bool {
+    if route_segment.starts_with('{') && route_segment.ends_with('}') {
+        let placeholder = &route_segment[1..route_segment.len() - 1];
+        placeholders.contains(&placeholder)
+    } else {
+        route_segment == url_segment
     }
 }
 
@@ -284,7 +316,13 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
             let args = captures.get(3).map_or("", |m| m.as_str());
 
             if args != "" {
-                routes.insert(string!(path.replace("_arg_", "%")), args.split(",").map(|s| s.to_string()).collect());
+                let r_path = Regex::new(r"(?m)_arg_(\w+)").unwrap();
+                let key = r_path.replace_all(&path, |captures: &fancy_regex::Captures| {
+                    let key = captures.get(1).map_or("", |m| m.as_str());
+                    format!("{{{key}}}")
+                });
+
+                routes.insert(string!(key), args.split(",").map(|s| s.to_string().replace(" ", "")).collect());
                 format!("fmt_{path}({args})")
             } else {
                 routes.insert(string!(path), vec![]);
@@ -313,15 +351,12 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
         ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard() {").to_string(), result)
     };
 
-    let mut ast = match engine.compile(&contents) {
+    let mut ast = match engine.compile(contents) {
         Ok(ast) => ast,
         Err(err) => error(&engine, &path, err),
     };
 
     ast.set_source(filename.to_string_lossy().to_string());
-
-    println!("{:?}", routes);
-    // println!("{}", contents);
 
     if url.clone() == "" && has_index {
         let (body, content_type, status_code) = engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, "_route_index", ()).unwrap();
@@ -331,9 +366,23 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
 
     for (route, args) in routes {
         let url = url.clone();
+        let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
 
         if url == route {
             match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, convert_to_format(&url.clone()), ()) {
+                Ok(response) => {
+                    let (body, content_type, status_code) = response;
+                    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
+                    return HttpResponse::build(status_code).content_type(content_type).body(body);
+                }
+                Err(err) => {
+                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Internal Server Error\n\n{err}"));
+                }
+            }
+        }
+
+        if match_route(&route, &args, &url) {
+            match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, route_to_fn(&route), ()) {
                 Ok(response) => {
                     let (body, content_type, status_code) = response;
                     println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);

@@ -18,8 +18,14 @@ hello() {
 }
 
 // get data from another website, then return as json
-get() {
+tests/fetch() {
    json(http::get("https://httpbin.org/json").json())
+}
+
+// route placeholders
+#[route("/example/{id}")]
+example(id) {
+   text("base: " + id)
 }
 ```
 
