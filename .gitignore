@@ -18,3 +18,4 @@ tests
 # bin
 bin
 config.toml
+test.db
