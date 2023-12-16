@@ -8,15 +8,23 @@ description = "barebones http scripting"
 
 [dependencies]
 peg = "0.8.2"
+toml = "0.8.8"
+home = "0.5.5"
 rhai-fs = "0.1.3"
+colored = "2.1.0"
+anyhow = "1.0.75"
 rhai-url = "0.0.5"
 actix-web = "4.4.0"
 macros-rs = "0.5.0"
 termcolor = "1.4.0"
 lazy_static = "1.4.0"
+smartstring = "1.0.1"
 serde_json = "1.0.108"
-fancy-regex = "0.12.0"
 serde = { version = "1.0.193", features = ["derive"] }
+regex = { package = "fancy-regex", version = "0.12.0" }
 reqwest = { version = "0.11.22", features = ["blocking"] }
 rhai = { version = "1.16.3", features = ["serde_json", "serde"] }
-smartstring = "1.0.1"
+tracing = "0.1.40"
+tracing-bunyan-formatter = "0.3.9"
+tracing-subscriber = "0.3.18"
+pickledb = { version = "0.5.1", features = ["json", "bincode", "cbor", "yaml"] }

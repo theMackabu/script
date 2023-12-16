@@ -3,12 +3,22 @@ index {
 }
 
 hello() {
-   text("Hello World!")
+   response("Hello World!", "text", 200)
 }
 
 #[route("/example")]
 example() {
    html(http::get("https://example.org").body)
+}
+
+#[route("/db")]
+db() {
+   let db = kv::load("test.db");
+   
+   db.set("some.key", json::dump(#{name: "John", id: 50}));
+   let data = json::parse(db.get("some.key"));
+   
+   json(data)
 }
 
 #[route("/example/{id}.txt")]
@@ -54,10 +64,10 @@ test.json() {
    let res = #{
        hello: "world",
        info: #{
-         path: path,
-         url: url,
-         ver: ver,
-         query: query,
+         path: request.path,
+         url: request.url,
+         ver: request.version,
+         query: request.query,
        }
    };
    

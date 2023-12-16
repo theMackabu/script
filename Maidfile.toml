@@ -4,7 +4,7 @@ version = "0.2.3"
 
 [tasks]
 clean = { script = ["rm -rf bin", "mkdir bin"] }
-run = { script = ["maid build -q", "./bin/script"] }
+run = { script = ["maid build -q", "bash -c './bin/script | bunyan'"] }
 
 [tasks.build]
 depends = ["clean"]

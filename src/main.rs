@@ -1,16 +1,29 @@
-use fancy_regex::{Captures, Error, Regex};
+mod config;
+mod database;
+mod file;
+
+use config::structs::Config;
 use lazy_static::lazy_static;
 use macros_rs::{crashln, str, string, ternary};
+use pickledb::PickleDb;
+use regex::{Captures, Error, Regex};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
 use smartstring::alias::String as SmString;
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{cell::RefCell, collections::BTreeMap, env, fs};
+use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
+use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
 use rhai::{packages::Package, plugin::*, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
 use rhai_fs::FilesystemPackage;
 use rhai_url::UrlPackage;
 
-use actix_web::{get, http::header::ContentType, http::StatusCode, web::Path, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{
+    get,
+    http::header::ContentType,
+    http::StatusCode,
+    web::{Data, Path},
+    App, HttpRequest, HttpResponse, HttpServer, Responder,
+};
 
 // convert to peg
 lazy_static! {
@@ -37,7 +50,7 @@ fn route_to_fn(input: &str) -> String {
     let re = Regex::new(r#"\{([^{}\s]+)\}"#).unwrap();
     let re_dot = Regex::new(r"\.(\w+)").unwrap();
 
-    let result = re.replace_all(&input, |captures: &fancy_regex::Captures| {
+    let result = re.replace_all(&input, |captures: &regex::Captures| {
         let content = captures.get(1).map_or("", |m| m.as_str());
         format!("_arg_{content}")
     });
@@ -58,6 +71,22 @@ fn error(engine: &Engine, path: &str, err: ParseError) -> AST {
         Ok(ast) => ast,
         Err(_) => Default::default(),
     }
+}
+
+pub fn response(data: String, content_type: String, status_code: i64) -> (String, ContentType, StatusCode) {
+    let content_type = match content_type.as_str() {
+        "xml" => ContentType::xml(),
+        "png" => ContentType::png(),
+        "html" => ContentType::html(),
+        "json" => ContentType::json(),
+        "jpeg" => ContentType::jpeg(),
+        "text" => ContentType::plaintext(),
+        "stream" => ContentType::octet_stream(),
+        "form" => ContentType::form_url_encoded(),
+        _ => ContentType::plaintext(),
+    };
+
+    (data, content_type, convert_status(status_code))
 }
 
 fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option<Vec<String>> {
@@ -129,8 +158,57 @@ mod status {
 }
 
 #[export_module]
+mod json {
+    pub fn dump<'s>(object: Map) -> String {
+        match serde_json::to_string(&object) {
+            Ok(result) => result,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "parse")]
+    pub fn parse<'s>(json: String) -> Result<Map, Box<EvalAltResult>> {
+        match serde_json::from_str(&json) {
+            Ok(map) => Ok(map),
+            Err(err) => Err(format!("{}", &err).into()),
+        }
+    }
+}
+
+#[export_module]
+mod kv {
+    #[derive(Clone)]
+    pub struct KV<'s> {
+        pub db: &'s RefCell<PickleDb>,
+    }
+
+    pub fn load<'s>(path: String) -> KV<'s> {
+        let db = RefCell::new(database::kv::load(path));
+        KV { db: Box::leak(Box::new(db)) }
+    }
+
+    #[rhai_fn(global, pure, return_raw, name = "set")]
+    pub fn set(conn: &mut KV, key: String, value: String) -> Result<(), Box<EvalAltResult>> {
+        let mut db = conn.db.borrow_mut();
+        match db.set(&key, &value) {
+            Err(err) => Err(format!("{}", &err).into()),
+            Ok(_) => Ok(()),
+        }
+    }
+
+    #[rhai_fn(global, name = "get")]
+    pub fn get(conn: KV, key: String) -> String {
+        let db = conn.db.borrow();
+        match db.get::<String>(&key) {
+            Some(data) => data,
+            None => string!(""),
+        }
+    }
+}
+
+#[export_module]
 mod http {
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Clone)]
     pub struct Http {
         pub length: Option<u64>,
         pub status: u16,
@@ -272,17 +350,20 @@ mod http {
 }
 
 #[get("{url:.*}")]
-async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
+async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> impl Responder {
     if url.as_str() == "favicon.ico" {
         return HttpResponse::Ok().body("");
     }
 
     let mut routes: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-    let filename: PathBuf = "app.routes".into();
+    let filename = &config.workers.get(0).unwrap();
     let fs_pkg = FilesystemPackage::new();
     let url_pkg = UrlPackage::new();
+
+    let json = exported_module!(json);
     let http = exported_module!(http);
+    let exists = exported_module!(file::exists);
 
     let mut engine = Engine::new();
     let mut scope = Scope::new();
@@ -294,15 +375,53 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
 
     fs_pkg.register_into_engine(&mut engine);
     url_pkg.register_into_engine(&mut engine);
-    engine.register_static_module("http", http.into());
 
-    scope
-        .push_constant("path", url.to_string())
-        .push_constant("url", req.uri().to_string())
-        .push_constant("ver", format!("{:?}", req.version()))
-        .push_constant("query", req.query_string().to_string());
+    engine.register_static_module("json", json.into());
+    engine.register_static_module("http", http.into());
+    engine.register_static_module("exists", exists.into());
+
+    if let Some(database) = &config.database {
+        if let Some(_) = &database.kv {
+            let kv = exported_module!(kv);
+            engine.register_static_module("kv", kv.into());
+        }
+        if let Some(_) = &database.sqlite {}
+        if let Some(_) = &database.mongo {}
+    }
+
+    #[derive(Clone)]
+    struct Request {
+        path: String,
+        url: String,
+        version: String,
+        query: String,
+    }
+
+    impl Request {
+        fn to_dynamic(&self) -> Dynamic {
+            let mut map = Map::new();
+
+            map.insert(SmString::from("path"), Dynamic::from(self.path.clone()));
+            map.insert(SmString::from("url"), Dynamic::from(self.url.clone()));
+            map.insert(SmString::from("version"), Dynamic::from(self.version.clone()));
+            map.insert(SmString::from("query"), Dynamic::from(self.query.clone()));
+
+            Dynamic::from(map)
+        }
+    }
+
+    let request = Request {
+        path: url.to_string(),
+        url: req.uri().to_string(),
+        version: format!("{:?}", req.version()),
+        query: req.query_string().to_string(),
+    };
+
+    scope.push("request", request.to_dynamic());
 
     engine
+        .register_fn("cwd", file::cwd)
+        .register_fn("response", response)
         .register_fn("text", default::text)
         .register_fn("json", default::json)
         .register_fn("html", default::html)
@@ -326,24 +445,24 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
         let re = Regex::new(pattern).unwrap();
         let re_combine = Regex::new(pattern_combine).unwrap();
 
-        let result =
-            re.replace_all(&contents, |captures: &fancy_regex::Captures| {
-                let content = captures.get(1).map_or("", |m| m.as_str());
-                format!("_arg_{content}")
-            });
+        let result = re.replace_all(&contents, |captures: &regex::Captures| {
+            let content = captures.get(1).map_or("", |m| m.as_str());
+            format!("_arg_{content}")
+        });
 
         let output = result.replace("#[route(\"", "_route").replace("\")]", "");
 
-        re_combine.replace_all(str!(output), |captures: &fancy_regex::Captures| {
+        re_combine.replace_all(str!(output), |captures: &regex::Captures| {
             let path = captures.get(1).map_or("", |m| m.as_str());
             let args = captures.get(3).map_or("", |m| m.as_str());
 
             if args != "" {
                 let r_path = Regex::new(r"(?m)_arg_(\w+)").unwrap();
-                let key = r_path.replace_all(&path, |captures: &fancy_regex::Captures| {
-                    let key = captures.get(1).map_or("", |m| m.as_str());
-                    format!("{{{key}}}")
-                });
+                let key =
+                    r_path.replace_all(&path, |captures: &regex::Captures| {
+                        let key = captures.get(1).map_or("", |m| m.as_str());
+                        format!("{{{key}}}")
+                    });
 
                 routes.insert(string!(key), args.split(",").map(|s| s.to_string().replace(" ", "")).collect());
                 format!("fmt_{path}({args})")
@@ -383,7 +502,13 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
 
     if url.clone() == "" && has_index {
         let (body, content_type, status_code) = engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, "_route_index", ()).unwrap();
-        println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
+        tracing::info!(
+            method = string!(req.method()),
+            status = string!(status_code),
+            content = string!(content_type),
+            "request '{}'",
+            req.uri()
+        );
         return HttpResponse::build(status_code).content_type(content_type).body(body);
     };
 
@@ -395,7 +520,13 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
             match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, convert_to_format(&url.clone()), ()) {
                 Ok(response) => {
                     let (body, content_type, status_code) = response;
-                    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
+                    tracing::info!(
+                        method = string!(req.method()),
+                        status = string!(status_code),
+                        content = string!(content_type),
+                        "request '{}'",
+                        req.uri()
+                    );
                     return HttpResponse::build(status_code).content_type(content_type).body(body);
                 }
                 Err(err) => {
@@ -408,7 +539,13 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
             Some(data) => match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, route_to_fn(&route), data) {
                 Ok(response) => {
                     let (body, content_type, status_code) = response;
-                    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
+                    tracing::info!(
+                        method = string!(req.method()),
+                        status = string!(status_code),
+                        content = string!(content_type),
+                        "request '{}'",
+                        req.uri()
+                    );
                     return HttpResponse::build(status_code).content_type(content_type).body(body);
                 }
                 Err(err) => {
@@ -435,15 +572,33 @@ async fn handler(url: Path<String>, req: HttpRequest) -> impl Responder {
     };
 
     let status_code = ternary!(has_wildcard, status_code, StatusCode::NOT_FOUND);
-    println!("{}: {} (status={}, type={})", req.method(), req.uri(), status_code, content_type);
+    tracing::info!(
+        method = string!(req.method()),
+        status = string!(status_code),
+        content = string!(content_type),
+        "request '{}'",
+        req.uri()
+    );
     return HttpResponse::build(status_code).content_type(content_type).body(body);
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let app = || App::new().service(handler);
-    let addr = ("127.0.0.1", 3000);
+    env::set_var("RUST_LOG", "INFO");
 
-    println!("listening on {:?}", addr);
-    HttpServer::new(app).bind(addr).unwrap().run().await
+    let config = config::read();
+    let app = || App::new().app_data(Data::new(config::read())).service(handler);
+
+    let formatting_layer = BunyanFormattingLayer::new("server".into(), std::io::stdout)
+        .skip_fields(vec!["file", "line"].into_iter())
+        .expect("Unable to create logger");
+
+    tracing_subscriber::registry()
+        .with(LevelFilter::from(tracing::Level::INFO))
+        .with(JsonStorageLayer)
+        .with(formatting_layer)
+        .init();
+
+    tracing::info!(address = config.settings.address, port = config.settings.port, "server started");
+    HttpServer::new(app).bind(config.get_address()).unwrap().run().await
 }

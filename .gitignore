@@ -2,7 +2,6 @@
 build
 target
 tests
-bin
 
 # maid
 .maid/cache
@@ -15,3 +14,7 @@ bin
 
 # backup
 .bak
+
+# bin
+bin
+config.toml
