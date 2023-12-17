@@ -336,6 +336,33 @@ mod mongo {
             None => to_dynamic::<Vec<Dynamic>>(vec![]),
         }
     }
+
+    #[rhai_fn(global)]
+    pub fn drop() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn insert_one() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn insert_many() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn delete_one() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn delete_many() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn replace_one() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn find_and_replace() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn find_and_update() -> bool { todo!() }
+
+    #[rhai_fn(global)]
+    pub fn find_and_delete() -> bool { todo!() }
 }
 
 #[export_module]
@@ -367,7 +394,31 @@ mod kv {
             None => string!(""),
         }
     }
+
+    #[rhai_fn(global, pure)]
+    pub fn del(conn: &mut KV, key: String) -> bool {
+        let mut db = conn.db.borrow_mut();
+        match db.rem(&key) {
+            Ok(bool) => bool,
+            Err(_) => false,
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn exists(conn: KV, key: String) -> bool { conn.db.borrow().exists(&key) }
+
+    #[rhai_fn(global)]
+    pub fn list(conn: KV) -> Vec<String> { conn.db.borrow().get_all() }
+
+    #[rhai_fn(global)]
+    pub fn count(conn: KV) -> i64 { conn.db.borrow().total_keys() as i64 }
+
+    #[rhai_fn(global, name = "drop")]
+    pub fn drop_db(conn: KV) { drop(conn.db.borrow()); }
 }
+
+#[export_module]
+mod sqlite {}
 
 #[export_module]
 mod http {
@@ -543,12 +594,16 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
     engine.register_static_module("http", http.into());
     engine.register_static_module("exists", exists.into());
 
+    // add redis support, sqlx,
     if let Some(database) = &config.database {
         if let Some(_) = &database.kv {
             let kv = exported_module!(kv);
             engine.register_static_module("kv", kv.into());
         }
-        if let Some(_) = &database.sqlite {}
+        if let Some(_) = &database.sqlite {
+            let sqlite = exported_module!(sqlite);
+            engine.register_static_module("sqlite", sqlite.into());
+        }
         if let Some(_) = &database.mongo {
             let mongo = exported_module!(mongo);
             engine.register_static_module("mongo", mongo.into());
