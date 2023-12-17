@@ -296,6 +296,17 @@ mod mongo {
         }
     }
 
+    #[rhai_fn(global, return_raw, name = "find_one")]
+    pub fn find_one(collection: Collection<MongoDynamic>, filter: Map) -> Result<Dynamic, Box<EvalAltResult>> {
+        match collection.find_one(IntoDocument::into(filter), None) {
+            Ok(cursor) => match cursor {
+                Some(item) => to_dynamic::<MongoDynamic>(item),
+                None => to_dynamic::<Vec<MongoDynamic>>(vec![]),
+            },
+            Err(err) => Err(format!("{}", &err).into()),
+        }
+    }
+
     #[rhai_fn(global, return_raw, name = "find")]
     pub fn find_filter(collection: Collection<MongoDynamic>, filter: Map) -> Result<Arc<Cursor<MongoDynamic>>, Box<EvalAltResult>> {
         match collection.find(IntoDocument::into(filter), None) {
@@ -312,12 +323,17 @@ mod mongo {
         }
     }
 
+    #[rhai_fn(global, name = "count")]
+    pub fn count_collect(items: Vec<Dynamic>) -> i64 { items.iter().count() as i64 }
+
     #[rhai_fn(global, return_raw, name = "collect")]
     pub fn collect(cursor: Arc<Cursor<MongoDynamic>>) -> Result<Dynamic, Box<EvalAltResult>> {
-        let cursor = Arc::try_unwrap(cursor).expect("Cursor failure");
-        match cursor.collect() {
-            Ok(items) => to_dynamic::<Vec<Dynamic>>(items),
-            Err(err) => to_dynamic::<String>(err.to_string()),
+        match Arc::into_inner(cursor) {
+            Some(cursor) => match cursor.collect() {
+                Ok(items) => to_dynamic::<Vec<Dynamic>>(items),
+                Err(err) => to_dynamic::<String>(err.to_string()),
+            },
+            None => to_dynamic::<Vec<Dynamic>>(vec![]),
         }
     }
 }

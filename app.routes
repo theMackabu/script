@@ -39,11 +39,17 @@ mongo(name) {
 #[route("/mongo/{name}/{collection}")]
 mongo(name, collection) {
    let conn = mongo::connect().db(name).get(collection);
-   let db = conn.find();
+   let list = conn.find().collect();
    
-   print(db.count());
+   json(#{count: list.count(), items: list})
+}
+
+#[route("/one")]
+one() {
+   let conn = mongo::connect().db("app").get("users");
+   let list = conn.find_one(#{firstname: "John"});
    
-   json(#{items: ""})
+   json(list)
 }
 
 #[route("/example/{id}.txt")]
