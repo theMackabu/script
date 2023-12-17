@@ -35,10 +35,15 @@ pub struct SQlite {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Mongo {
-    pub database: String,
-    pub address: String,
+    pub url: Option<String>,
+    pub advanced: Option<MongoAdvanced>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MongoAdvanced {
     pub port: u64,
-    pub auth: MongoAuth,
+    pub address: String,
+    pub auth: Option<MongoAuth>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

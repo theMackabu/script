@@ -21,6 +21,31 @@ db() {
    json(data)
 }
 
+#[route("/mongo/list")]
+mongo() {
+   let conn = mongo::connect();
+   
+   json(conn.list())
+}
+
+#[route("/mongo/{name}")]
+mongo(name) {
+   let conn = mongo::connect();
+   let db = conn.db(name);
+   
+   json(db.list())
+}
+
+#[route("/mongo/{name}/{collection}")]
+mongo(name, collection) {
+   let conn = mongo::connect().db(name).get(collection);
+   let db = conn.find();
+   
+   print(db.count());
+   
+   json(#{items: ""})
+}
+
 #[route("/example/{id}.txt")]
 example(id) {
    text("base: " + id)

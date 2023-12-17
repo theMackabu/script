@@ -7,15 +7,22 @@ use lazy_static::lazy_static;
 use macros_rs::{crashln, str, string, ternary};
 use pickledb::PickleDb;
 use regex::{Captures, Error, Regex};
-use reqwest::blocking::Client;
+use reqwest::blocking::Client as ReqwestClient;
+use serde::{Deserialize, Serialize};
 use smartstring::alias::String as SmString;
-use std::{cell::RefCell, collections::BTreeMap, env, fs};
+use std::{cell::RefCell, collections::BTreeMap, env, fs, sync::Arc};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
-use rhai::{packages::Package, plugin::*, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
+use rhai::{packages::Package, plugin::*, serde::to_dynamic, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
 use rhai_fs::FilesystemPackage;
 use rhai_url::UrlPackage;
+
+use mongodb::{
+    bson::Document,
+    results::CollectionSpecification,
+    sync::{Client as MongoClient, Collection, Cursor, Database},
+};
 
 use actix_web::{
     get,
@@ -137,7 +144,7 @@ fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) 
 mod default {
     pub fn text(string: String) -> (String, ContentType, StatusCode) { (string, ContentType::plaintext(), StatusCode::OK) }
     pub fn html(string: String) -> (String, ContentType, StatusCode) { (string, ContentType::html(), StatusCode::OK) }
-    pub fn json(object: Map) -> (String, ContentType, StatusCode) {
+    pub fn json(object: Dynamic) -> (String, ContentType, StatusCode) {
         match serde_json::to_string(&object) {
             Ok(result) => (result, ContentType::json(), StatusCode::OK),
             Err(err) => (err.to_string(), ContentType::plaintext(), StatusCode::INTERNAL_SERVER_ERROR),
@@ -149,7 +156,7 @@ mod default {
 mod status {
     pub fn text(string: String, status: i64) -> (String, ContentType, StatusCode) { (string, ContentType::plaintext(), convert_status(status)) }
     pub fn html(string: String, status: i64) -> (String, ContentType, StatusCode) { (string, ContentType::html(), convert_status(status)) }
-    pub fn json(object: Map, status: i64) -> (String, ContentType, StatusCode) {
+    pub fn json(object: Dynamic, status: i64) -> (String, ContentType, StatusCode) {
         match serde_json::to_string(&object) {
             Ok(result) => (result, ContentType::json(), convert_status(status)),
             Err(err) => (err.to_string(), ContentType::plaintext(), StatusCode::INTERNAL_SERVER_ERROR),
@@ -159,7 +166,7 @@ mod status {
 
 #[export_module]
 mod json {
-    pub fn dump<'s>(object: Map) -> String {
+    pub fn dump<'s>(object: Dynamic) -> String {
         match serde_json::to_string(&object) {
             Ok(result) => result,
             Err(err) => err.to_string(),
@@ -176,6 +183,146 @@ mod json {
 }
 
 #[export_module]
+mod mongo {
+    #[derive(Clone)]
+    pub struct Client {
+        pub client: Option<MongoClient>,
+    }
+
+    #[derive(Clone)]
+    pub struct Mongo {
+        pub db: Option<Database>,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct MongoDynamic(Dynamic);
+
+    unsafe impl Send for MongoDynamic {}
+    unsafe impl Sync for MongoDynamic {}
+
+    impl FromIterator<MongoDynamic> for Vec<Dynamic> {
+        fn from_iter<I: IntoIterator<Item = MongoDynamic>>(iter: I) -> Self { iter.into_iter().map(|mongo_dynamic| mongo_dynamic.0).collect() }
+    }
+
+    trait IntoDocument {
+        fn into(self) -> Document;
+    }
+
+    impl IntoDocument for Map {
+        fn into(self) -> Document {
+            Document::from(
+                serde_json::from_str(&match serde_json::to_string(&self) {
+                    Ok(data) => data,
+                    Err(err) => format!("{{\"err\": \"{err}\"}}"),
+                })
+                .expect("failed to deserialize"),
+            )
+        }
+    }
+
+    pub fn connect() -> Client {
+        let config = config::read().database.unwrap();
+
+        match MongoClient::with_uri_str(config.mongo.unwrap().url.unwrap_or("".to_string())) {
+            Ok(client) => Client { client: Some(client) },
+            Err(_) => Client { client: None },
+        }
+    }
+
+    pub fn shutdown(conn: Client) { conn.client.unwrap().shutdown(); }
+
+    #[rhai_fn(global, return_raw, name = "list")]
+    pub fn list_databases(conn: Client) -> Result<Dynamic, Box<EvalAltResult>> {
+        match conn.client {
+            Some(client) => match client.list_databases(None, None) {
+                Err(err) => Err(format!("{}", &err).into()),
+                Ok(list) => to_dynamic(list),
+            },
+            None => to_dynamic::<Vec<Dynamic>>(vec![]),
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "count")]
+    pub fn count_databases(conn: Client) -> Result<i64, Box<EvalAltResult>> {
+        match conn.client {
+            Some(client) => match client.list_databases(None, None) {
+                Err(err) => Err(format!("{}", &err).into()),
+                Ok(list) => Ok(list.len() as i64),
+            },
+            None => Ok(0),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn db(conn: Client, name: String) -> Mongo {
+        match conn.client {
+            None => Mongo { db: None },
+            Some(client) => Mongo { db: Some(client.database(&name)) },
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "list")]
+    pub fn list_collections(conn: Mongo) -> Result<Dynamic, Box<EvalAltResult>> {
+        match conn.db {
+            Some(client) => match client.list_collections(None, None) {
+                Err(err) => Err(format!("{}", &err).into()),
+                Ok(list) => to_dynamic(list.map(|item| item.unwrap()).collect::<Vec<CollectionSpecification>>()),
+            },
+            None => to_dynamic::<Vec<Dynamic>>(vec![]),
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "get")]
+    pub fn collection(conn: Mongo, name: String) -> Result<Collection<MongoDynamic>, Box<EvalAltResult>> {
+        match conn.db {
+            Some(client) => Ok(client.collection(&name)),
+            None => Err("No collection found".into()),
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "count")]
+    pub fn count_collections(collection: Collection<MongoDynamic>) -> Result<i64, Box<EvalAltResult>> {
+        match collection.count_documents(None, None) {
+            Ok(count) => Ok(count as i64),
+            Err(err) => Err(format!("{}", &err).into()),
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "find")]
+    pub fn find_all(collection: Collection<MongoDynamic>) -> Result<Arc<Cursor<MongoDynamic>>, Box<EvalAltResult>> {
+        match collection.find(None, None) {
+            Ok(cursor) => Ok(Arc::new(cursor)),
+            Err(err) => Err(format!("{}", &err).into()),
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "find")]
+    pub fn find_filter(collection: Collection<MongoDynamic>, filter: Map) -> Result<Arc<Cursor<MongoDynamic>>, Box<EvalAltResult>> {
+        match collection.find(IntoDocument::into(filter), None) {
+            Ok(cursor) => Ok(Arc::new(cursor)),
+            Err(err) => Err(format!("{}", &err).into()),
+        }
+    }
+
+    #[rhai_fn(global, name = "count")]
+    pub fn count_cursor(cursor: Arc<Cursor<MongoDynamic>>) -> i64 {
+        match Arc::into_inner(cursor) {
+            Some(cursor) => cursor.count() as i64,
+            None => 0,
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "collect")]
+    pub fn collect(cursor: Arc<Cursor<MongoDynamic>>) -> Result<Dynamic, Box<EvalAltResult>> {
+        let cursor = Arc::try_unwrap(cursor).expect("Cursor failure");
+        match cursor.collect() {
+            Ok(items) => to_dynamic::<Vec<Dynamic>>(items),
+            Err(err) => to_dynamic::<String>(err.to_string()),
+        }
+    }
+}
+
+#[export_module]
 mod kv {
     #[derive(Clone)]
     pub struct KV<'s> {
@@ -187,7 +334,7 @@ mod kv {
         KV { db: Box::leak(Box::new(db)) }
     }
 
-    #[rhai_fn(global, pure, return_raw, name = "set")]
+    #[rhai_fn(global, pure, return_raw)]
     pub fn set(conn: &mut KV, key: String, value: String) -> Result<(), Box<EvalAltResult>> {
         let mut db = conn.db.borrow_mut();
         match db.set(&key, &value) {
@@ -196,7 +343,7 @@ mod kv {
         }
     }
 
-    #[rhai_fn(global, name = "get")]
+    #[rhai_fn(global)]
     pub fn get(conn: KV, key: String) -> String {
         let db = conn.db.borrow();
         match db.get::<String>(&key) {
@@ -236,7 +383,7 @@ mod http {
     }
 
     pub fn get(url: String) -> Http {
-        let client = Client::new();
+        let client = ReqwestClient::new();
         let response =
             match client.get(url).send() {
                 Ok(res) => res,
@@ -268,7 +415,7 @@ mod http {
     }
 
     pub fn post(url: String, data: Map) -> Http {
-        let client = Client::new();
+        let client = ReqwestClient::new();
 
         let data =
             match serde_json::to_string(&data) {
@@ -386,7 +533,10 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
             engine.register_static_module("kv", kv.into());
         }
         if let Some(_) = &database.sqlite {}
-        if let Some(_) = &database.mongo {}
+        if let Some(_) = &database.mongo {
+            let mongo = exported_module!(mongo);
+            engine.register_static_module("mongo", mongo.into());
+        }
     }
 
     #[derive(Clone)]
