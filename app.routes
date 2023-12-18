@@ -129,7 +129,7 @@ test/loadfile() {
 
 // remove to test 404 route
 * {
-   text("this is a wildcard route\ncurrently on: " + path)
+   text("this is a wildcard route\ncurrently on: " + request.path)
 }
 
 404 {

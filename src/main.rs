@@ -1,7 +1,9 @@
 mod config;
 mod database;
 mod file;
+mod helpers;
 
+use askama::Template;
 use config::structs::Config;
 use lazy_static::lazy_static;
 use macros_rs::{crashln, str, string, ternary};
@@ -15,7 +17,7 @@ use std::{cell::RefCell, collections::BTreeMap, env, fs, sync::Arc};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
-use rhai::{packages::Package, plugin::*, serde::to_dynamic, Array, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
+use rhai::{packages::Package, plugin::*, serde::to_dynamic, Array, Dynamic, Engine, FnNamespace, Map, Scope};
 use rhai_fs::FilesystemPackage;
 use rhai_url::UrlPackage;
 
@@ -33,6 +35,22 @@ use actix_web::{
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ServerError {
+    error: String,
+    context: Vec<(String, String)>,
+}
+
+#[derive(Template)]
+#[template(path = "message.html")]
+struct Message<'a> {
+    code: u16,
+    note: &'a str,
+    error: &'a str,
+    message: String,
+}
+
 // convert to peg
 lazy_static! {
     static ref R_INDEX: Result<Regex, Error> = Regex::new(r"index\s*\{");
@@ -41,44 +59,6 @@ lazy_static! {
     static ref R_DOT: Result<Regex, Error> = Regex::new(r"\.(\w+)\((.*?)\)\s*\{");
     static ref R_WILD: Result<Regex, Error> = Regex::new(r"\*\s*\{|wildcard\s*\{");
     static ref R_SLASH: Result<Regex, Error> = Regex::new(r"(?m)\/(?=.*\((.*?)\)\s*\{[^{]*$)");
-}
-
-fn rm_first(s: &str) -> &str {
-    let mut chars = s.chars();
-    chars.next();
-    chars.as_str()
-}
-
-fn convert_to_format(input: &str) -> String {
-    let re = Regex::new(r"\.(\w+)").unwrap();
-    format!("_route_{}", re.replace_all(&input.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0]))))
-}
-
-fn route_to_fn(input: &str) -> String {
-    let re = Regex::new(r#"\{([^{}\s]+)\}"#).unwrap();
-    let re_dot = Regex::new(r"\.(\w+)").unwrap();
-
-    let result = re.replace_all(&input, |captures: &regex::Captures| {
-        let content = captures.get(1).map_or("", |m| m.as_str());
-        format!("_arg_{content}")
-    });
-
-    format!(
-        "_route_fmt_{}",
-        re_dot.replace_all(&result.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
-    )
-}
-
-fn convert_status(code: i64) -> StatusCode {
-    let u16_code = code as u16;
-    StatusCode::from_u16(u16_code).unwrap_or(StatusCode::OK)
-}
-
-fn error(engine: &Engine, path: &str, err: ParseError) -> AST {
-    match engine.compile(format!("fn {path}(){{text(\"error reading script file: {err}\")}}")) {
-        Ok(ast) => ast,
-        Err(_) => Default::default(),
-    }
 }
 
 pub fn response(data: String, content_type: String, status_code: i64) -> (String, ContentType, StatusCode) {
@@ -94,7 +74,7 @@ pub fn response(data: String, content_type: String, status_code: i64) -> (String
         _ => ContentType::plaintext(),
     };
 
-    (data, content_type, convert_status(status_code))
+    (data, content_type, helpers::convert_status(status_code))
 }
 
 fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option<Vec<String>> {
@@ -164,11 +144,11 @@ mod default {
 
 #[export_module]
 mod status {
-    pub fn text(string: String, status: i64) -> (String, ContentType, StatusCode) { (string, ContentType::plaintext(), convert_status(status)) }
-    pub fn html(string: String, status: i64) -> (String, ContentType, StatusCode) { (string, ContentType::html(), convert_status(status)) }
+    pub fn text(string: String, status: i64) -> (String, ContentType, StatusCode) { (string, ContentType::plaintext(), helpers::convert_status(status)) }
+    pub fn html(string: String, status: i64) -> (String, ContentType, StatusCode) { (string, ContentType::html(), helpers::convert_status(status)) }
     pub fn json(object: Dynamic, status: i64) -> (String, ContentType, StatusCode) {
         match serde_json::to_string(&object) {
-            Ok(result) => (result, ContentType::json(), convert_status(status)),
+            Ok(result) => (result, ContentType::json(), helpers::convert_status(status)),
             Err(err) => (err.to_string(), ContentType::plaintext(), StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
@@ -805,6 +785,20 @@ mod http {
 
 #[get("{url:.*}")]
 async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> impl Responder {
+    macro_rules! send {
+        ($response:expr) => {{
+            let (body, content_type, status_code) = $response;
+            tracing::info!(
+                method = string!(req.method()),
+                status = string!(status_code),
+                content = string!(content_type),
+                "request '{}'",
+                req.uri()
+            );
+            return HttpResponse::build(status_code).content_type(content_type).body(body);
+        }};
+    }
+
     if url.as_str() == "favicon.ico" {
         return HttpResponse::Ok().body("");
     }
@@ -824,7 +818,7 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
 
     let path = match url.as_str() {
         "" => "_route_index".to_string(),
-        _ => convert_to_format(&url.clone()),
+        _ => helpers::convert_to_format(&url.clone()),
     };
 
     fs_pkg.register_into_engine(&mut engine);
@@ -947,7 +941,11 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
             routes.insert(string!(path.replace("_", "/")), vec![]);
         }
 
-        let result = R_DOT.as_ref().unwrap().replace_all(&result, |captures: &Captures| format!("__d{}", rm_first(&captures[0]))).to_string();
+        let result = R_DOT
+            .as_ref()
+            .unwrap()
+            .replace_all(&result, |captures: &Captures| format!("__d{}", helpers::rm_first(&captures[0])))
+            .to_string();
         let result = R_FN.as_ref().unwrap().replace_all(&result, |captures: &Captures| format!("fn _route_{}", &captures[0])).to_string();
 
         ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard() {").to_string(), result)
@@ -955,24 +953,16 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
 
     let mut ast = match engine.compile(&contents) {
         Ok(ast) => ast,
-        Err(err) => error(&engine, &path, err),
+        Err(err) => helpers::error(&engine, &path, err),
     };
 
     ast.set_source(filename.to_string_lossy().to_string());
 
     if url.clone() == "" && has_index {
-        let (body, content_type, status_code) = engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, "_route_index", ()).unwrap();
-        tracing::info!(
-            method = string!(req.method()),
-            status = string!(status_code),
-            content = string!(content_type),
-            "request '{}'",
-            req.uri()
-        );
-        return HttpResponse::build(status_code).content_type(content_type).body(body);
+        send!(engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, "_route_index", ()).unwrap());
     };
 
-    fn extract_context(contents: String, err: String) -> String {
+    fn extract_context(contents: String, err: String) -> Vec<(String, String)> {
         let re = Regex::new(r"line (\d+)").unwrap();
 
         if let Some(captures) = re.captures(&err).unwrap() {
@@ -985,14 +975,13 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
                     return lines[start_line..end_line]
                         .iter()
                         .enumerate()
-                        .map(|(i, line)| format!("<pre><span class=\"number\">{:>4} | </span>{}</pre>", start_line + i + 1, line))
-                        .collect::<Vec<String>>()
-                        .join("\n");
+                        .map(|(i, line)| (format!("{:>4}", start_line + i + 1), line.to_string()))
+                        .collect::<Vec<(String, String)>>();
                 }
             }
         }
 
-        "".to_string()
+        vec![]
     }
 
     for (route, args) in routes {
@@ -1000,341 +989,51 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
         let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
 
         if url == route {
-            match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, convert_to_format(&url.clone()), ()) {
-                Ok(response) => {
-                    let (body, content_type, status_code) = response;
-                    tracing::info!(
-                        method = string!(req.method()),
-                        status = string!(status_code),
-                        content = string!(content_type),
-                        "request '{}'",
-                        req.uri()
-                    );
-                    return HttpResponse::build(status_code).content_type(content_type).body(body);
-                }
+            match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::convert_to_format(&url.clone()), ()) {
+                Ok(response) => send!(response),
                 Err(err) => {
-                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(format!(
-                        r#"<html lang="en">
-                                <meta charset="utf-8" />
-                                <meta name="viewport" content="width=device-width,initial-scale=1" />
-                                <style>
-                                    html {{
-                                        font-size: 62.5%;
-                                        box-sizing: border-box;
-                                        height: -webkit-fill-available;
-                                    }}
-                            
-                                    *,
-                                    ::after,
-                                    ::before {{
-                                        box-sizing: inherit;
-                                    }}
-                            
-                                    body {{
-                                        font-family:
-                                            sf pro text,
-                                            sf pro icons,
-                                            helvetica neue,
-                                            helvetica,
-                                            arial,
-                                            sans-serif;
-                                        font-size: 1.6rem;
-                                        line-height: 1.65;
-                                        word-break: break-word;
-                                        font-kerning: auto;
-                                        font-variant: normal;
-                                        -webkit-font-smoothing: antialiased;
-                                        -moz-osx-font-smoothing: grayscale;
-                                        text-rendering: optimizeLegibility;
-                                        hyphens: auto;
-                                        height: 100vh;
-                                        height: -webkit-fill-available;
-                                        max-height: 100vh;
-                                        max-height: -webkit-fill-available;
-                                        margin: 0;
-                                    }}
-                            
-                                    a {{
-                                        cursor: pointer;
-                                        color: #0070f3;
-                                        text-decoration: none;
-                                        transition: all 0.2s ease;
-                                        border-bottom: 1px solid #0000;
-                                    }}
-                            
-                                    a:hover {{
-                                        border-bottom: 1px solid #0070f3;
-                                    }}
-                            
-                                    ul {{
-                                        padding: 0;
-                                        margin-left: 1.5em;
-                                        list-style-type: none;
-                                    }}
-                            
-                                    li {{
-                                        margin-bottom: 0px;
-                                    }}
-                            
-                                    pre {{
-                                        font-family:
-                                            Menlo,
-                                            Monaco,
-                                            Lucida Console,
-                                            Liberation Mono,
-                                            DejaVu Sans Mono,
-                                            Bitstream Vera Sans Mono,
-                                            Courier New,
-                                            monospace,
-                                            serif;
-                                        font-size: 0.92em;
-                                    }}
-                            
-                                    .container {{
-                                        display: flex;
-                                        justify-content: center;
-                                        flex-direction: column;
-                                        min-height: 100%;
-                                    }}
-                                    
-                                    .number {{ 
-                                        color: #4D4D4D;
-                                    }}
-                            
-                                    main {{
-                                        max-width: 80rem;
-                                        padding: 4rem 6rem;
-                                        margin: auto;
-                                    }}
-                            
-                                    .error-title {{
-                                        font-size: 2rem;
-                                        padding-left: 22px;
-                                        line-height: 1.5;
-                                        margin-bottom: 24px;
-                                    }}
-                            
-                                    .error-title-guilty {{
-                                        border-left: 2px solid #ed367f;
-                                    }}
-                            
-                                    .error-title-innocent {{
-                                        border-left: 2px solid #59b89c;
-                                    }}
-                            
-                                  main p {{
-                                      color: #333;
-                                  }}
-                                  
-                                  .devinfo-container {{
-                                      border: 1px solid #ddd;
-                                      border-radius: 4px;
-                                      padding: 2rem;
-                                      display: flex;
-                                      flex-direction: column;
-                                      margin-bottom: 32px;
-                                  }}
-                                  
-                                  .error-code {{
-                                      margin: 0;
-                                      font-size: 1.6rem;
-                                      color: #000;
-                                      margin-bottom: 1.6rem;
-                                  }}
-                                  
-                                  .devinfo-line {{
-                                      color: #333;
-                                  }}
-                                  
-                                  .devinfo-line pre,
-                                  pre,
-                                  li {{
-                                      color: #000;
-                                  }}
-                                  
-                                  .devinfo-line:not(:last-child) {{
-                                      margin-bottom: 8px;
-                                  }}
-                                  
-                                  .docs-link,
-                                  .contact-link {{
-                                      font-weight: 500;
-                                  }}
-                                  
-                                  header,
-                                  footer,
-                                  footer a {{
-                                      display: flex;
-                                      justify-content: center;
-                                      align-items: center;
-                                  }}
-                                  
-                                  header,
-                                  footer {{
-                                      min-height: 100px;
-                                      height: 100px;
-                                  }}
-                                  
-                                  header {{
-                                      border-bottom: 1px solid #eaeaea;
-                                  }}
-                                  
-                                  header h1 {{
-                                      font-size: 1.8rem;
-                                      margin: 0;
-                                      font-weight: 500;
-                                  }}
-                                  
-                                  header p {{
-                                      font-size: 1.3rem;
-                                      margin: 0;
-                                      font-weight: 500;
-                                  }}
-                                  
-                                  .header-item {{
-                                      display: flex;
-                                      padding: 0 2rem;
-                                      margin: 2rem 0;
-                                      text-decoration: line-through;
-                                      color: #999;
-                                  }}
-                                  
-                                  .header-item.active {{
-                                      color: #ff0080;
-                                      text-decoration: none;
-                                  }}
-                                  
-                                  .header-item.first {{
-                                      border-right: 1px solid #eaeaea;
-                                  }}
-                                  
-                                  .header-item-content {{
-                                      display: flex;
-                                      flex-direction: column;
-                                  }}
-                                  
-                                  .header-item-icon {{
-                                      margin-right: 1rem;
-                                      margin-top: 0.6rem;
-                                  }}
-                                  
-                                  footer {{
-                                      border-top: 1px solid #eaeaea;
-                                  }}
-                                  
-                                  footer a {{
-                                      color: #000;
-                                  }}
-                                  
-                                  footer a:hover {{
-                                      border-bottom-color: #0000;
-                                  }}
-                                  
-                                  footer svg {{
-                                      margin-left: 0.8rem;
-                                  }}
-                                  
-                                  .note {{
-                                      padding: 5pt 10pt 5pt 1pt;
-                                      border-radius: 5px;
-                                      border: 1px solid #F30000;
-                                      font-size: 14px;
-                                      line-height: 0.5;
-                                      margin-top: 16px;
-                                      overflow: scroll;
-                                  }}
-                                  
-                                  @media (max-width: 500px) {{
-                                      .devinfo-container .devinfo-line pre {{
-                                          margin-top: 0.4rem;
-                                      }}
-                                      .devinfo-container .devinfo-line:not(:last-child) {{
-                                          margin-bottom: 1.6rem;
-                                      }}
-                                      .devinfo-container {{
-                                          margin-bottom: 0;
-                                      }}
-                                      header {{
-                                          flex-direction: column;
-                                          height: auto;
-                                          min-height: auto;
-                                          align-items: flex-start;
-                                      }}
-                                      .header-item.first {{
-                                          border-right: none;
-                                          margin-bottom: 0;
-                                      }}
-                                      main {{
-                                          padding: 1rem 2rem;
-                                      }}
-                                      body {{
-                                          font-size: 1.4rem;
-                                          line-height: 1.55;
-                                      }}
-                                  }}
-                                </style>
-                                <title>500: Internal Server Error</title>
-                                <div class="container">
-                                    <main>
-                                        <p class="devinfo-container">
-                                            <span class="error-code"><strong>500</strong>: Internal Server Error</span>
-                                            <span class="devinfo-line">{}</span>
-                                        </p>
-                            
-                                        <div class="note">{}</div>
-                                    </main>
-                                </div>
-                            </html>"#,
-                        err.to_string().replace("\n", "<br>"),
-                        extract_context(contents, err.to_string())
-                    ))
+                    let body = ServerError {
+                        error: err.to_string().replace("\n", "<br>"),
+                        context: extract_context(contents, err.to_string()),
+                    };
+
+                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(body.render().unwrap());
                 }
             }
         }
 
         match match_route(&route, &args, &url) {
-            Some(data) => match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, route_to_fn(&route), data) {
-                Ok(response) => {
-                    let (body, content_type, status_code) = response;
-                    tracing::info!(
-                        method = string!(req.method()),
-                        status = string!(status_code),
-                        content = string!(content_type),
-                        "request '{}'",
-                        req.uri()
-                    );
-                    return HttpResponse::build(status_code).content_type(content_type).body(body);
+            Some(data) => match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::route_to_fn(&route), data) {
+                Ok(response) => send!(response),
+                Err(err) => {
+                    let body = ServerError {
+                        error: err.to_string().replace("\n", "<br>"),
+                        context: extract_context(contents, err.to_string()),
+                    };
+
+                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(body.render().unwrap());
                 }
-                Err(err) => return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Internal Server Error\n\n{err}\n\n{}", extract_context(contents, err.to_string()))),
             },
             None => {}
         }
     }
 
-    let (body, content_type, status_code) = {
-        if has_wildcard || has_error_page {
-            engine
-                .call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, ternary!(has_wildcard, "_wildcard", "_route_error_404"), ())
-                .unwrap()
-        } else {
-            eprintln!("Error reading script file: {}", filename.to_string_lossy());
-            (
-                format!("function not found.\ndid you create {url}()?\n\nyou can add * {{}} or 404 {{}} routes as well."),
-                ContentType::plaintext(),
-                StatusCode::NOT_FOUND,
-            )
-        }
-    };
+    if has_wildcard || has_error_page {
+        let (body, content_type, status_code) = engine
+            .call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, ternary!(has_wildcard, "_wildcard", "_route_error_404"), ())
+            .unwrap();
 
-    let status_code = ternary!(has_wildcard, status_code, StatusCode::NOT_FOUND);
-    tracing::info!(
-        method = string!(req.method()),
-        status = string!(status_code),
-        content = string!(content_type),
-        "request '{}'",
-        req.uri()
-    );
-    return HttpResponse::build(status_code).content_type(content_type).body(body);
+        send!((body, content_type, ternary!(has_wildcard, status_code, StatusCode::NOT_FOUND)))
+    } else {
+        let body = Message {
+            error: "Function Not Found",
+            code: StatusCode::NOT_FOUND.as_u16(),
+            message: format!("Have you created the <code>{url}()</code> route?"),
+            note: "You can add <code>* {}</code> or <code>404 {}</code> routes as well",
+        };
+
+        send!((body.render().unwrap(), ContentType::html(), StatusCode::NOT_FOUND))
+    }
 }
 
 #[actix_web::main]

@@ -1,0 +1,134 @@
+<html lang="en">
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width,initial-scale=1" />
+	<style>
+		html {
+			font-size: 62.5%;
+			box-sizing: border-box;
+			height: -webkit-fill-available;
+		}
+
+		*,
+		::after,
+		::before {
+			box-sizing: inherit;
+		}
+
+		body {
+			font-family:
+				sf pro text,
+				sf pro icons,
+				helvetica neue,
+				helvetica,
+				arial,
+				sans-serif;
+			font-size: 1.6rem;
+			line-height: 1.65;
+			word-break: break-word;
+			font-kerning: auto;
+			font-variant: normal;
+			-webkit-font-smoothing: antialiased;
+			-moz-osx-font-smoothing: grayscale;
+			text-rendering: optimizeLegibility;
+			hyphens: auto;
+			height: 100vh;
+			height: -webkit-fill-available;
+			max-height: 100vh;
+			max-height: -webkit-fill-available;
+			margin: 0;
+		}
+
+		code {
+			font-family:
+				Menlo,
+				Monaco,
+				Lucida Console,
+				Liberation Mono,
+				DejaVu Sans Mono,
+				Bitstream Vera Sans Mono,
+				Courier New,
+				monospace,
+				serif;
+			font-size: 0.92em;
+		}
+
+		.container {
+			display: flex;
+			justify-content: center;
+			flex-direction: column;
+			min-height: 100%;
+		}
+
+		main {
+			max-width: 80rem;
+			padding: 4rem 6rem;
+			margin: auto;
+		}
+
+		main p {
+			color: #333;
+		}
+
+		.card {
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			padding: 2rem;
+			display: flex;
+			flex-direction: column;
+			margin-bottom: 32px;
+		}
+
+		.error {
+			margin: 0;
+			font-size: 1.6rem;
+			color: #000;
+			margin-bottom: 1.6rem;
+		}
+
+		.info {
+			color: #333;
+		}
+
+		code {
+			color: #000;
+		}
+
+		code:after,
+		code:before {
+			content: '`';
+		}
+
+		.note {
+			padding: 20px;
+			border-radius: 5px;
+			border: 1px solid #0070f3;
+			font-size: 16px;
+			line-height: 0.5;
+			margin-top: 16px;
+			overflow: scroll;
+		}
+
+		@media (max-width: 500px) {
+			.card {
+				margin-bottom: 0;
+			}
+			main {
+				padding: 1rem 2rem;
+			}
+			body {
+				font-size: 1.4rem;
+				line-height: 1.55;
+			}
+		}
+	</style>
+	<title>{{ code }} {{ error }}</title>
+	<div class="container">
+		<main>
+			<p class="card">
+				<span class="error"><strong>{{ code }}</strong>: {{ error }}</span>
+				<span class="info">{{ message|safe }}</span>
+			</p>
+			<div class="note">{{ note|safe }}</div>
+		</main>
+	</div>
+</html>
