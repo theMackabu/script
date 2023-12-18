@@ -435,8 +435,8 @@ mod redis_db {
         }
     }
 
-    #[rhai_fn(global, return_raw)]
-    pub fn set(redis: Redis, key: String, value: String) -> Result<(), Box<EvalAltResult>> {
+    #[rhai_fn(global, return_raw, name = "set")]
+    pub fn set_string(redis: Redis, key: String, value: String) -> Result<(), Box<EvalAltResult>> {
         let mut conn = redis.client.unwrap().get_connection().unwrap();
         match conn.set::<String, String, ()>(key, value) {
             Err(err) => Err(format!("{}", &err).into()),
@@ -444,7 +444,16 @@ mod redis_db {
         }
     }
 
-    #[rhai_fn(global)]
+    #[rhai_fn(global, return_raw, name = "set")]
+    pub fn set_i64(redis: Redis, key: String, value: i64) -> Result<(), Box<EvalAltResult>> {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.set::<String, i64, ()>(key, value) {
+            Err(err) => Err(format!("{}", &err).into()),
+            Ok(_) => Ok(()),
+        }
+    }
+
+    #[rhai_fn(global, name = "get")]
     pub fn get(redis: Redis, key: String) -> String {
         let mut conn = redis.client.unwrap().get_connection().unwrap();
         match conn.get::<String, String>(key) {
@@ -541,6 +550,46 @@ mod redis_db {
             Ok(data) => to_dynamic::<Vec<String>>(data),
             Err(_) => to_dynamic::<Vec<String>>(vec![]),
         }
+    }
+
+    #[rhai_fn(global, return_raw, name = "list")]
+    pub fn list_all(redis: Redis) -> Result<Dynamic, Box<EvalAltResult>> {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+
+        let keys = match conn.keys("*") {
+            Ok(data) => data,
+            Err(_) => vec![],
+        };
+
+        let items = keys
+            .into_iter()
+            .map(|key| {
+                let value: Option<String> = conn.get(&key).unwrap();
+                (key, value.unwrap_or_else(|| "".to_string()))
+            })
+            .collect::<BTreeMap<String, String>>();
+
+        to_dynamic(items)
+    }
+
+    #[rhai_fn(global, return_raw, name = "list")]
+    pub fn list_filter(redis: Redis, filter: String) -> Result<Dynamic, Box<EvalAltResult>> {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+
+        let keys = match conn.keys(filter) {
+            Ok(data) => data,
+            Err(_) => vec![],
+        };
+
+        let items = keys
+            .into_iter()
+            .map(|key| {
+                let value: Option<String> = conn.get(&key).unwrap();
+                (key, value.unwrap_or_else(|| "".to_string()))
+            })
+            .collect::<BTreeMap<String, String>>();
+
+        to_dynamic(items)
     }
 }
 

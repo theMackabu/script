@@ -13,11 +13,21 @@ example() {
 
 #[route("/db")]
 db() {
-   let db = db::kv::load("test.db");
+   let db = kv::load("test.db");
    
    db.set("some.key", json::dump(#{name: "John", id: 50}));
    let data = json::parse(db.get("some.key"));
    
+   json(data)
+}
+
+#[route("/redis")]
+redis() {
+   let db = redis::connect();
+   
+   db.set("some.key", json::dump(#{name: "John", id: 50}));
+   let data = json::parse(db.get("some.key"));
+ 
    json(data)
 }
 
@@ -44,7 +54,7 @@ mongo(name, collection) {
    json(#{count: list.count(), items: list})
 }
 
-#[route("/one")]
+#[route("/mongo/test")]
 one() {
    let conn = mongo::connect().db("app").get("users");
    let list = conn.find_one(#{firstname: "John"});
