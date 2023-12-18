@@ -6,6 +6,7 @@ use config::structs::Config;
 use lazy_static::lazy_static;
 use macros_rs::{crashln, str, string, ternary};
 use pickledb::PickleDb;
+use redis::{Client as RedisClient, Commands};
 use regex::{Captures, Error, Regex};
 use reqwest::blocking::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
@@ -183,7 +184,7 @@ mod json {
 }
 
 #[export_module]
-mod mongo {
+mod mongo_db {
     #[derive(Clone)]
     pub struct Client {
         pub client: Option<MongoClient>,
@@ -222,7 +223,6 @@ mod mongo {
 
     pub fn connect() -> Client {
         let config = config::read().database.unwrap();
-
         match MongoClient::with_uri_str(config.mongo.unwrap().server.unwrap_or("".to_string())) {
             Ok(client) => Client { client: Some(client) },
             Err(_) => Client { client: None },
@@ -366,7 +366,7 @@ mod mongo {
 }
 
 #[export_module]
-mod kv {
+mod kv_db {
     #[derive(Clone)]
     pub struct KV<'s> {
         pub db: &'s RefCell<PickleDb>,
@@ -418,10 +418,131 @@ mod kv {
 }
 
 #[export_module]
-mod sqlite {}
+mod sqlite_db {}
 
 #[export_module]
-mod redis {}
+mod redis_db {
+    #[derive(Clone)]
+    pub struct Redis {
+        pub client: Option<RedisClient>,
+    }
+
+    pub fn connect() -> Redis {
+        let config = config::read().database.unwrap();
+        match RedisClient::open(config.redis.unwrap().server) {
+            Ok(client) => Redis { client: Some(client) },
+            Err(_) => Redis { client: None },
+        }
+    }
+
+    #[rhai_fn(global, return_raw)]
+    pub fn set(redis: Redis, key: String, value: String) -> Result<(), Box<EvalAltResult>> {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.set::<String, String, ()>(key, value) {
+            Err(err) => Err(format!("{}", &err).into()),
+            Ok(_) => Ok(()),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn get(redis: Redis, key: String) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.get::<String, String>(key) {
+            Ok(data) => data,
+            Err(_) => string!(""),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn del(redis: Redis, key: String) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.del(key) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn expire(redis: Redis, key: String, s: i64) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.expire(key, s) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn persist(redis: Redis, key: String) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.persist(key) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn ttl(redis: Redis, key: String) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.ttl(key) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn rename(redis: Redis, key: String, new: String) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.rename(key, new) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn append(redis: Redis, key: String, value: String) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.append(key, value) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn inc(redis: Redis, key: String, value: i64) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.incr(key, value) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn dec(redis: Redis, key: String, value: i64) -> String {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.decr(key, value) {
+            Ok(data) => data,
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[rhai_fn(global)]
+    pub fn exists(redis: Redis, key: String) -> bool {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.exists(key) {
+            Ok(bool) => bool,
+            Err(_) => false,
+        }
+    }
+
+    #[rhai_fn(global, return_raw)]
+    pub fn keys(redis: Redis, filter: String) -> Result<Dynamic, Box<EvalAltResult>> {
+        let mut conn = redis.client.unwrap().get_connection().unwrap();
+        match conn.keys(filter) {
+            Ok(data) => to_dynamic::<Vec<String>>(data),
+            Err(_) => to_dynamic::<Vec<String>>(vec![]),
+        }
+    }
+}
 
 #[export_module]
 mod sqlx {}
@@ -603,19 +724,19 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
     // add redis support, sqlx,
     if let Some(database) = &config.database {
         if let Some(_) = &database.kv {
-            let kv = exported_module!(kv);
+            let kv = exported_module!(kv_db);
             engine.register_static_module("kv", kv.into());
         }
         if let Some(_) = &database.sqlite {
-            let sqlite = exported_module!(sqlite);
+            let sqlite = exported_module!(sqlite_db);
             engine.register_static_module("sqlite", sqlite.into());
         }
         if let Some(_) = &database.mongo {
-            let mongo = exported_module!(mongo);
+            let mongo = exported_module!(mongo_db);
             engine.register_static_module("mongo", mongo.into());
         }
         if let Some(_) = &database.redis {
-            let redis = exported_module!(redis);
+            let redis = exported_module!(redis_db);
             engine.register_static_module("redis", redis.into());
         }
     }
