@@ -21,7 +21,7 @@ use rhai_url::UrlPackage;
 
 use mongodb::{
     bson::{doc, Document},
-    results::{CollectionSpecification, DeleteResult, InsertManyResult, InsertOneResult, UpdateResult},
+    results::{CollectionSpecification, DeleteResult, InsertOneResult, UpdateResult},
     sync::{Client as MongoClient, Collection, Cursor, Database},
 };
 
@@ -368,7 +368,7 @@ mod mongo_db {
         match Arc::into_inner(cursor) {
             Some(cursor) => match cursor.collect() {
                 Ok(items) => to_dynamic::<Array>(items),
-                Err(err) => to_dynamic::<String>(err.to_string()),
+                Err(err) => Err(err.to_string().into()),
             },
             None => to_dynamic::<Array>(vec![]),
         }
@@ -397,15 +397,15 @@ mod mongo_db {
     pub fn insert_one(collection: Collection<MongoDynamic>, map: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
         match collection.insert_one(map.into_map(), None) {
             Ok(res) => to_dynamic::<InsertOneResult>(res),
-            Err(err) => to_dynamic::<String>(err.to_string()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
     #[rhai_fn(global, return_raw, name = "insert")]
-    pub fn insert_many(collection: Collection<MongoDynamic>, map: Array) -> Result<Dynamic, Box<EvalAltResult>> {
+    pub fn insert_many(collection: Collection<MongoDynamic>, map: Array) -> Result<Array, Box<EvalAltResult>> {
         match collection.insert_many(map.into_vec(), None) {
-            Ok(res) => to_dynamic::<InsertManyResult>(res),
-            Err(err) => to_dynamic::<String>(err.to_string()),
+            Ok(res) => Ok(res.inserted_ids.into_iter().map(|(_, value)| to_dynamic(value).unwrap()).collect::<Array>()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -413,7 +413,7 @@ mod mongo_db {
     pub fn delete(collection: Collection<MongoDynamic>, map: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
         match collection.delete_one(map.into_doc(), None) {
             Ok(res) => to_dynamic::<DeleteResult>(res),
-            Err(err) => to_dynamic::<String>(err.to_string()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -421,7 +421,7 @@ mod mongo_db {
     pub fn delete_many(collection: Collection<MongoDynamic>, map: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
         match collection.delete_many(map.into_doc(), None) {
             Ok(res) => to_dynamic::<DeleteResult>(res),
-            Err(err) => to_dynamic::<String>(err.to_string()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -430,7 +430,7 @@ mod mongo_db {
         let replacement: MongoDynamic = replacement.into();
         match collection.replace_one(query.into_doc(), replacement, None) {
             Ok(res) => to_dynamic::<UpdateResult>(res),
-            Err(err) => to_dynamic::<String>(err.to_string()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 }
