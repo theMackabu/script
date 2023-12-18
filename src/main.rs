@@ -418,9 +418,6 @@ mod kv_db {
 }
 
 #[export_module]
-mod sqlite_db {}
-
-#[export_module]
 mod redis_db {
     #[derive(Clone)]
     pub struct Redis {
@@ -592,9 +589,6 @@ mod redis_db {
         to_dynamic(items)
     }
 }
-
-#[export_module]
-mod sqlx {}
 
 #[export_module]
 mod http {
@@ -770,15 +764,10 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
     engine.register_static_module("http", http.into());
     engine.register_static_module("exists", exists.into());
 
-    // add redis support, sqlx,
     if let Some(database) = &config.database {
         if let Some(_) = &database.kv {
             let kv = exported_module!(kv_db);
             engine.register_static_module("kv", kv.into());
-        }
-        if let Some(_) = &database.sqlite {
-            let sqlite = exported_module!(sqlite_db);
-            engine.register_static_module("sqlite", sqlite.into());
         }
         if let Some(_) = &database.mongo {
             let mongo = exported_module!(mongo_db);

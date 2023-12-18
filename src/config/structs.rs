@@ -21,17 +21,11 @@ pub struct Database {
     pub kv: Option<KV>,
     pub mongo: Option<Mongo>,
     pub redis: Option<Redis>,
-    pub sqlite: Option<SQlite>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct KV {
     pub method: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SQlite {
-    pub connect: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
