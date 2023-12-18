@@ -15,13 +15,13 @@ use std::{cell::RefCell, collections::BTreeMap, env, fs, sync::Arc};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
-use rhai::{packages::Package, plugin::*, serde::to_dynamic, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
+use rhai::{packages::Package, plugin::*, serde::to_dynamic, Array, Dynamic, Engine, FnNamespace, Map, ParseError, Scope, AST};
 use rhai_fs::FilesystemPackage;
 use rhai_url::UrlPackage;
 
 use mongodb::{
-    bson::Document,
-    results::CollectionSpecification,
+    bson::{doc, Document},
+    results::{CollectionSpecification, DeleteResult, InsertManyResult, InsertOneResult, UpdateResult},
     sync::{Client as MongoClient, Collection, Cursor, Database},
 };
 
@@ -120,6 +120,15 @@ fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option
     Some(matched_placeholders)
 }
 
+fn collection_exists(d: &Database, name: &String) -> Result<bool, Box<EvalAltResult>> {
+    let filter = doc! { "name": &name };
+
+    match d.list_collection_names(Some(filter)) {
+        Err(err) => Err(err.to_string().into()),
+        Ok(list) => Ok(list.into_iter().any(|col| col == *name)),
+    }
+}
+
 fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) -> Option<String> {
     if route_segment.starts_with('{') && route_segment.ends_with('}') {
         let placeholder = &route_segment[1..route_segment.len() - 1];
@@ -178,7 +187,7 @@ mod json {
     pub fn parse<'s>(json: String) -> Result<Map, Box<EvalAltResult>> {
         match serde_json::from_str(&json) {
             Ok(map) => Ok(map),
-            Err(err) => Err(format!("{}", &err).into()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 }
@@ -201,24 +210,38 @@ mod mongo_db {
     unsafe impl Send for MongoDynamic {}
     unsafe impl Sync for MongoDynamic {}
 
-    impl FromIterator<MongoDynamic> for Vec<Dynamic> {
-        fn from_iter<I: IntoIterator<Item = MongoDynamic>>(iter: I) -> Self { iter.into_iter().map(|mongo_dynamic| mongo_dynamic.0).collect() }
+    trait MongoVec {
+        fn into_vec(self) -> Vec<MongoDynamic>;
     }
 
-    trait IntoDocument {
-        fn into(self) -> Document;
+    trait MongoDocument {
+        fn into_doc(self) -> Document;
+        fn into_map(self) -> MongoDynamic;
     }
 
-    impl IntoDocument for Map {
-        fn into(self) -> Document {
+    impl Into<MongoDynamic> for Dynamic {
+        fn into(self) -> MongoDynamic { MongoDynamic(self) }
+    }
+
+    impl FromIterator<MongoDynamic> for Array {
+        fn from_iter<I: IntoIterator<Item = MongoDynamic>>(iter: I) -> Self { iter.into_iter().map(|m| m.0).collect() }
+    }
+
+    impl MongoVec for Array {
+        fn into_vec(self) -> Vec<MongoDynamic> { self.into_iter().map(|m| m.into_map()).collect() }
+    }
+
+    impl MongoDocument for Dynamic {
+        fn into_doc(self) -> Document {
             Document::from(
                 serde_json::from_str(&match serde_json::to_string(&self) {
                     Ok(data) => data,
                     Err(err) => format!("{{\"err\": \"{err}\"}}"),
                 })
-                .expect("failed to deserialize"),
+                .unwrap_or(doc! {"err": format!("unable to deserialize {self}")}),
             )
         }
+        fn into_map(self) -> MongoDynamic { MongoDynamic(to_dynamic(self.into_doc()).unwrap()) }
     }
 
     pub fn connect() -> Client {
@@ -235,10 +258,10 @@ mod mongo_db {
     pub fn list_databases(conn: Client) -> Result<Dynamic, Box<EvalAltResult>> {
         match conn.client {
             Some(client) => match client.list_databases(None, None) {
-                Err(err) => Err(format!("{}", &err).into()),
+                Err(err) => Err(err.to_string().into()),
                 Ok(list) => to_dynamic(list),
             },
-            None => to_dynamic::<Vec<Dynamic>>(vec![]),
+            None => to_dynamic::<Array>(vec![]),
         }
     }
 
@@ -246,7 +269,7 @@ mod mongo_db {
     pub fn count_databases(conn: Client) -> Result<i64, Box<EvalAltResult>> {
         match conn.client {
             Some(client) => match client.list_databases(None, None) {
-                Err(err) => Err(format!("{}", &err).into()),
+                Err(err) => Err(err.to_string().into()),
                 Ok(list) => Ok(list.len() as i64),
             },
             None => Ok(0),
@@ -262,21 +285,35 @@ mod mongo_db {
     }
 
     #[rhai_fn(global, return_raw, name = "list")]
-    pub fn list_collections(conn: Mongo) -> Result<Dynamic, Box<EvalAltResult>> {
-        match conn.db {
+    pub fn list_collections(m: Mongo) -> Result<Dynamic, Box<EvalAltResult>> {
+        match m.db {
             Some(client) => match client.list_collections(None, None) {
-                Err(err) => Err(format!("{}", &err).into()),
+                Err(err) => Err(err.to_string().into()),
                 Ok(list) => to_dynamic(list.map(|item| item.unwrap()).collect::<Vec<CollectionSpecification>>()),
             },
-            None => to_dynamic::<Vec<Dynamic>>(vec![]),
+            None => to_dynamic::<Array>(vec![]),
         }
     }
 
     #[rhai_fn(global, return_raw, name = "get")]
-    pub fn collection(conn: Mongo, name: String) -> Result<Collection<MongoDynamic>, Box<EvalAltResult>> {
-        match conn.db {
+    pub fn collection(m: Mongo, name: String) -> Result<Collection<MongoDynamic>, Box<EvalAltResult>> {
+        match m.db {
             Some(client) => Ok(client.collection(&name)),
-            None => Err("No collection found".into()),
+            None => Err("No database found".into()),
+        }
+    }
+
+    #[rhai_fn(global, return_raw, name = "create")]
+    pub fn create_collection(m: Mongo, name: String) -> Result<Collection<MongoDynamic>, Box<EvalAltResult>> {
+        match m.db {
+            Some(client) => match collection_exists(&client, &name).unwrap() {
+                true => Ok(client.collection(&name)),
+                false => match client.create_collection(&name, None) {
+                    Err(err) => Err(err.to_string().into()),
+                    Ok(_) => Ok(client.collection(&name)),
+                },
+            },
+            None => Err("No database found".into()),
         }
     }
 
@@ -284,7 +321,7 @@ mod mongo_db {
     pub fn count_collections(collection: Collection<MongoDynamic>) -> Result<i64, Box<EvalAltResult>> {
         match collection.count_documents(None, None) {
             Ok(count) => Ok(count as i64),
-            Err(err) => Err(format!("{}", &err).into()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -292,26 +329,26 @@ mod mongo_db {
     pub fn find_all(collection: Collection<MongoDynamic>) -> Result<Arc<Cursor<MongoDynamic>>, Box<EvalAltResult>> {
         match collection.find(None, None) {
             Ok(cursor) => Ok(Arc::new(cursor)),
-            Err(err) => Err(format!("{}", &err).into()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
     #[rhai_fn(global, return_raw, name = "find_one")]
-    pub fn find_one(collection: Collection<MongoDynamic>, filter: Map) -> Result<Dynamic, Box<EvalAltResult>> {
-        match collection.find_one(IntoDocument::into(filter), None) {
+    pub fn find_one(collection: Collection<MongoDynamic>, filter: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
+        match collection.find_one(filter.into_doc(), None) {
             Ok(cursor) => match cursor {
                 Some(item) => to_dynamic::<MongoDynamic>(item),
                 None => to_dynamic::<Vec<MongoDynamic>>(vec![]),
             },
-            Err(err) => Err(format!("{}", &err).into()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
     #[rhai_fn(global, return_raw, name = "find")]
-    pub fn find_filter(collection: Collection<MongoDynamic>, filter: Map) -> Result<Arc<Cursor<MongoDynamic>>, Box<EvalAltResult>> {
-        match collection.find(IntoDocument::into(filter), None) {
+    pub fn find_filter(collection: Collection<MongoDynamic>, filter: Dynamic) -> Result<Arc<Cursor<MongoDynamic>>, Box<EvalAltResult>> {
+        match collection.find(filter.into_doc(), None) {
             Ok(cursor) => Ok(Arc::new(cursor)),
-            Err(err) => Err(format!("{}", &err).into()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -324,45 +361,78 @@ mod mongo_db {
     }
 
     #[rhai_fn(global, name = "count")]
-    pub fn count_collect(items: Vec<Dynamic>) -> i64 { items.iter().count() as i64 }
+    pub fn count_collect(items: Array) -> i64 { items.iter().count() as i64 }
 
     #[rhai_fn(global, return_raw, name = "collect")]
     pub fn collect(cursor: Arc<Cursor<MongoDynamic>>) -> Result<Dynamic, Box<EvalAltResult>> {
         match Arc::into_inner(cursor) {
             Some(cursor) => match cursor.collect() {
-                Ok(items) => to_dynamic::<Vec<Dynamic>>(items),
+                Ok(items) => to_dynamic::<Array>(items),
                 Err(err) => to_dynamic::<String>(err.to_string()),
             },
-            None => to_dynamic::<Vec<Dynamic>>(vec![]),
+            None => to_dynamic::<Array>(vec![]),
         }
     }
 
-    #[rhai_fn(global)]
-    pub fn drop() -> bool { todo!() }
+    #[rhai_fn(global, name = "drop")]
+    pub fn drop_collection(collection: Collection<MongoDynamic>) -> bool {
+        match collection.drop(None) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
 
-    #[rhai_fn(global)]
-    pub fn insert_one() -> bool { todo!() }
+    #[rhai_fn(global, return_raw, name = "drop")]
+    pub fn drop_database(m: Mongo) -> Result<bool, Box<EvalAltResult>> {
+        match m.db {
+            Some(client) => match client.drop(None) {
+                Ok(_) => Ok(true),
+                Err(err) => Err(err.to_string().into()),
+            },
+            None => Err("No collection found".into()),
+        }
+    }
 
-    #[rhai_fn(global)]
-    pub fn insert_many() -> bool { todo!() }
+    #[rhai_fn(global, return_raw, name = "insert")]
+    pub fn insert_one(collection: Collection<MongoDynamic>, map: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
+        match collection.insert_one(map.into_map(), None) {
+            Ok(res) => to_dynamic::<InsertOneResult>(res),
+            Err(err) => to_dynamic::<String>(err.to_string()),
+        }
+    }
 
-    #[rhai_fn(global)]
-    pub fn delete_one() -> bool { todo!() }
+    #[rhai_fn(global, return_raw, name = "insert")]
+    pub fn insert_many(collection: Collection<MongoDynamic>, map: Array) -> Result<Dynamic, Box<EvalAltResult>> {
+        match collection.insert_many(map.into_vec(), None) {
+            Ok(res) => to_dynamic::<InsertManyResult>(res),
+            Err(err) => to_dynamic::<String>(err.to_string()),
+        }
+    }
 
-    #[rhai_fn(global)]
-    pub fn delete_many() -> bool { todo!() }
+    #[rhai_fn(global, return_raw)]
+    pub fn delete(collection: Collection<MongoDynamic>, map: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
+        match collection.delete_one(map.into_doc(), None) {
+            Ok(res) => to_dynamic::<DeleteResult>(res),
+            Err(err) => to_dynamic::<String>(err.to_string()),
+        }
+    }
 
-    #[rhai_fn(global)]
-    pub fn replace_one() -> bool { todo!() }
+    #[rhai_fn(global, return_raw)]
+    pub fn delete_many(collection: Collection<MongoDynamic>, map: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
+        match collection.delete_many(map.into_doc(), None) {
+            Ok(res) => to_dynamic::<DeleteResult>(res),
+            Err(err) => to_dynamic::<String>(err.to_string()),
+        }
+    }
 
-    #[rhai_fn(global)]
-    pub fn find_and_replace() -> bool { todo!() }
-
-    #[rhai_fn(global)]
-    pub fn find_and_update() -> bool { todo!() }
-
-    #[rhai_fn(global)]
-    pub fn find_and_delete() -> bool { todo!() }
+    #[rhai_fn(global, return_raw)]
+    pub fn update(collection: Collection<MongoDynamic>, query: Dynamic, replacement: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
+        let replacement: MongoDynamic = replacement.into();
+        match collection.replace_one(query.into_doc(), replacement, None) {
+            Ok(res) => to_dynamic::<UpdateResult>(res),
+            Err(err) => to_dynamic::<String>(err.to_string()),
+        }
+    }
 }
 
 #[export_module]
@@ -381,8 +451,8 @@ mod kv_db {
     pub fn set(conn: &mut KV, key: String, value: String) -> Result<(), Box<EvalAltResult>> {
         let mut db = conn.db.borrow_mut();
         match db.set(&key, &value) {
-            Err(err) => Err(format!("{}", &err).into()),
             Ok(_) => Ok(()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -436,8 +506,8 @@ mod redis_db {
     pub fn set_string(redis: Redis, key: String, value: String) -> Result<(), Box<EvalAltResult>> {
         let mut conn = redis.client.unwrap().get_connection().unwrap();
         match conn.set::<String, String, ()>(key, value) {
-            Err(err) => Err(format!("{}", &err).into()),
             Ok(_) => Ok(()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -445,8 +515,8 @@ mod redis_db {
     pub fn set_i64(redis: Redis, key: String, value: i64) -> Result<(), Box<EvalAltResult>> {
         let mut conn = redis.client.unwrap().get_connection().unwrap();
         match conn.set::<String, i64, ()>(key, value) {
-            Err(err) => Err(format!("{}", &err).into()),
             Ok(_) => Ok(()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -716,7 +786,7 @@ mod http {
         let body = str!(res.body.clone().unwrap());
         match serde_json::from_str(body) {
             Ok(map) => Ok(map),
-            Err(err) => Err(format!("{}", &err).into()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 
@@ -728,7 +798,7 @@ mod http {
         };
         match serde_json::from_str(&format!("{{\"message\":{err}}}")) {
             Ok(msg) => Ok(msg),
-            Err(err) => Err(format!("{}", &err).into()),
+            Err(err) => Err(err.to_string().into()),
         }
     }
 }
@@ -883,7 +953,7 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
         ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard() {").to_string(), result)
     };
 
-    let mut ast = match engine.compile(contents) {
+    let mut ast = match engine.compile(&contents) {
         Ok(ast) => ast,
         Err(err) => error(&engine, &path, err),
     };
@@ -901,6 +971,29 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
         );
         return HttpResponse::build(status_code).content_type(content_type).body(body);
     };
+
+    fn extract_context(contents: String, err: String) -> String {
+        let re = Regex::new(r"line (\d+)").unwrap();
+
+        if let Some(captures) = re.captures(&err).unwrap() {
+            if let Some(num) = captures.get(1) {
+                if let Ok(line_number) = num.as_str().parse::<usize>() {
+                    let lines: Vec<&str> = contents.lines().collect();
+                    let start_line = line_number.saturating_sub(3);
+                    let end_line = (line_number + 4).min(lines.len());
+
+                    return lines[start_line..end_line]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, line)| format!("<pre><span class=\"number\">{:>4} | </span>{}</pre>", start_line + i + 1, line))
+                        .collect::<Vec<String>>()
+                        .join("\n");
+                }
+            }
+        }
+
+        "".to_string()
+    }
 
     for (route, args) in routes {
         let url = url.clone();
@@ -920,7 +1013,281 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
                     return HttpResponse::build(status_code).content_type(content_type).body(body);
                 }
                 Err(err) => {
-                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Internal Server Error\n\n{err}"));
+                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(format!(
+                        r#"<html lang="en">
+                                <meta charset="utf-8" />
+                                <meta name="viewport" content="width=device-width,initial-scale=1" />
+                                <style>
+                                    html {{
+                                        font-size: 62.5%;
+                                        box-sizing: border-box;
+                                        height: -webkit-fill-available;
+                                    }}
+                            
+                                    *,
+                                    ::after,
+                                    ::before {{
+                                        box-sizing: inherit;
+                                    }}
+                            
+                                    body {{
+                                        font-family:
+                                            sf pro text,
+                                            sf pro icons,
+                                            helvetica neue,
+                                            helvetica,
+                                            arial,
+                                            sans-serif;
+                                        font-size: 1.6rem;
+                                        line-height: 1.65;
+                                        word-break: break-word;
+                                        font-kerning: auto;
+                                        font-variant: normal;
+                                        -webkit-font-smoothing: antialiased;
+                                        -moz-osx-font-smoothing: grayscale;
+                                        text-rendering: optimizeLegibility;
+                                        hyphens: auto;
+                                        height: 100vh;
+                                        height: -webkit-fill-available;
+                                        max-height: 100vh;
+                                        max-height: -webkit-fill-available;
+                                        margin: 0;
+                                    }}
+                            
+                                    a {{
+                                        cursor: pointer;
+                                        color: #0070f3;
+                                        text-decoration: none;
+                                        transition: all 0.2s ease;
+                                        border-bottom: 1px solid #0000;
+                                    }}
+                            
+                                    a:hover {{
+                                        border-bottom: 1px solid #0070f3;
+                                    }}
+                            
+                                    ul {{
+                                        padding: 0;
+                                        margin-left: 1.5em;
+                                        list-style-type: none;
+                                    }}
+                            
+                                    li {{
+                                        margin-bottom: 0px;
+                                    }}
+                            
+                                    pre {{
+                                        font-family:
+                                            Menlo,
+                                            Monaco,
+                                            Lucida Console,
+                                            Liberation Mono,
+                                            DejaVu Sans Mono,
+                                            Bitstream Vera Sans Mono,
+                                            Courier New,
+                                            monospace,
+                                            serif;
+                                        font-size: 0.92em;
+                                    }}
+                            
+                                    .container {{
+                                        display: flex;
+                                        justify-content: center;
+                                        flex-direction: column;
+                                        min-height: 100%;
+                                    }}
+                                    
+                                    .number {{ 
+                                        color: #4D4D4D;
+                                    }}
+                            
+                                    main {{
+                                        max-width: 80rem;
+                                        padding: 4rem 6rem;
+                                        margin: auto;
+                                    }}
+                            
+                                    .error-title {{
+                                        font-size: 2rem;
+                                        padding-left: 22px;
+                                        line-height: 1.5;
+                                        margin-bottom: 24px;
+                                    }}
+                            
+                                    .error-title-guilty {{
+                                        border-left: 2px solid #ed367f;
+                                    }}
+                            
+                                    .error-title-innocent {{
+                                        border-left: 2px solid #59b89c;
+                                    }}
+                            
+                                  main p {{
+                                      color: #333;
+                                  }}
+                                  
+                                  .devinfo-container {{
+                                      border: 1px solid #ddd;
+                                      border-radius: 4px;
+                                      padding: 2rem;
+                                      display: flex;
+                                      flex-direction: column;
+                                      margin-bottom: 32px;
+                                  }}
+                                  
+                                  .error-code {{
+                                      margin: 0;
+                                      font-size: 1.6rem;
+                                      color: #000;
+                                      margin-bottom: 1.6rem;
+                                  }}
+                                  
+                                  .devinfo-line {{
+                                      color: #333;
+                                  }}
+                                  
+                                  .devinfo-line pre,
+                                  pre,
+                                  li {{
+                                      color: #000;
+                                  }}
+                                  
+                                  .devinfo-line:not(:last-child) {{
+                                      margin-bottom: 8px;
+                                  }}
+                                  
+                                  .docs-link,
+                                  .contact-link {{
+                                      font-weight: 500;
+                                  }}
+                                  
+                                  header,
+                                  footer,
+                                  footer a {{
+                                      display: flex;
+                                      justify-content: center;
+                                      align-items: center;
+                                  }}
+                                  
+                                  header,
+                                  footer {{
+                                      min-height: 100px;
+                                      height: 100px;
+                                  }}
+                                  
+                                  header {{
+                                      border-bottom: 1px solid #eaeaea;
+                                  }}
+                                  
+                                  header h1 {{
+                                      font-size: 1.8rem;
+                                      margin: 0;
+                                      font-weight: 500;
+                                  }}
+                                  
+                                  header p {{
+                                      font-size: 1.3rem;
+                                      margin: 0;
+                                      font-weight: 500;
+                                  }}
+                                  
+                                  .header-item {{
+                                      display: flex;
+                                      padding: 0 2rem;
+                                      margin: 2rem 0;
+                                      text-decoration: line-through;
+                                      color: #999;
+                                  }}
+                                  
+                                  .header-item.active {{
+                                      color: #ff0080;
+                                      text-decoration: none;
+                                  }}
+                                  
+                                  .header-item.first {{
+                                      border-right: 1px solid #eaeaea;
+                                  }}
+                                  
+                                  .header-item-content {{
+                                      display: flex;
+                                      flex-direction: column;
+                                  }}
+                                  
+                                  .header-item-icon {{
+                                      margin-right: 1rem;
+                                      margin-top: 0.6rem;
+                                  }}
+                                  
+                                  footer {{
+                                      border-top: 1px solid #eaeaea;
+                                  }}
+                                  
+                                  footer a {{
+                                      color: #000;
+                                  }}
+                                  
+                                  footer a:hover {{
+                                      border-bottom-color: #0000;
+                                  }}
+                                  
+                                  footer svg {{
+                                      margin-left: 0.8rem;
+                                  }}
+                                  
+                                  .note {{
+                                      padding: 5pt 10pt 5pt 1pt;
+                                      border-radius: 5px;
+                                      border: 1px solid #F30000;
+                                      font-size: 14px;
+                                      line-height: 0.5;
+                                      margin-top: 16px;
+                                      overflow: scroll;
+                                  }}
+                                  
+                                  @media (max-width: 500px) {{
+                                      .devinfo-container .devinfo-line pre {{
+                                          margin-top: 0.4rem;
+                                      }}
+                                      .devinfo-container .devinfo-line:not(:last-child) {{
+                                          margin-bottom: 1.6rem;
+                                      }}
+                                      .devinfo-container {{
+                                          margin-bottom: 0;
+                                      }}
+                                      header {{
+                                          flex-direction: column;
+                                          height: auto;
+                                          min-height: auto;
+                                          align-items: flex-start;
+                                      }}
+                                      .header-item.first {{
+                                          border-right: none;
+                                          margin-bottom: 0;
+                                      }}
+                                      main {{
+                                          padding: 1rem 2rem;
+                                      }}
+                                      body {{
+                                          font-size: 1.4rem;
+                                          line-height: 1.55;
+                                      }}
+                                  }}
+                                </style>
+                                <title>500: Internal Server Error</title>
+                                <div class="container">
+                                    <main>
+                                        <p class="devinfo-container">
+                                            <span class="error-code"><strong>500</strong>: Internal Server Error</span>
+                                            <span class="devinfo-line">{}</span>
+                                        </p>
+                            
+                                        <div class="note">{}</div>
+                                    </main>
+                                </div>
+                            </html>"#,
+                        err.to_string().replace("\n", "<br>"),
+                        extract_context(contents, err.to_string())
+                    ))
                 }
             }
         }
@@ -938,9 +1305,7 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
                     );
                     return HttpResponse::build(status_code).content_type(content_type).body(body);
                 }
-                Err(err) => {
-                    return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Internal Server Error\n\n{err}"));
-                }
+                Err(err) => return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Internal Server Error\n\n{err}\n\n{}", extract_context(contents, err.to_string()))),
             },
             None => {}
         }

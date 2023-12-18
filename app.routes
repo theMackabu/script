@@ -25,7 +25,7 @@ db() {
 redis() {
    let db = redis::connect();
    
-   db.set("some.key", json::dump(#{name: "John", id: 50}));
+   db.set("some.key", json::dump(#{name: "John Doe", id: 50}));
    let data = json::parse(db.get("some.key"));
  
    json(data)
@@ -50,14 +50,21 @@ mongo(name) {
 mongo(name, collection) {
    let conn = mongo::connect().db(name).get(collection);
    let list = conn.find().collect();
-   
+      
    json(#{count: list.count(), items: list})
 }
 
 #[route("/mongo/test")]
-one() {
-   let conn = mongo::connect().db("app").get("users");
-   let list = conn.find_one(#{firstname: "John"});
+test() {
+   let conn = mongo::connect().db("app").create("users");
+   
+   conn.insert([
+      #{firstname: "John", lastname: "Doe", id: 50},
+      #{firstname: "John", lastname: "Doe", id: 51},
+   ]);
+   
+   let list = conn.find(#{firstname: "John"}).collect();
+   conn.delete_many(#{firstname: "John"});
    
    json(list)
 }
