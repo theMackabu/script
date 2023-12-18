@@ -223,7 +223,7 @@ mod mongo {
     pub fn connect() -> Client {
         let config = config::read().database.unwrap();
 
-        match MongoClient::with_uri_str(config.mongo.unwrap().url.unwrap_or("".to_string())) {
+        match MongoClient::with_uri_str(config.mongo.unwrap().server.unwrap_or("".to_string())) {
             Ok(client) => Client { client: Some(client) },
             Err(_) => Client { client: None },
         }
@@ -421,6 +421,12 @@ mod kv {
 mod sqlite {}
 
 #[export_module]
+mod redis {}
+
+#[export_module]
+mod sqlx {}
+
+#[export_module]
 mod http {
     #[derive(Clone)]
     pub struct Http {
@@ -607,6 +613,10 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
         if let Some(_) = &database.mongo {
             let mongo = exported_module!(mongo);
             engine.register_static_module("mongo", mongo.into());
+        }
+        if let Some(_) = &database.redis {
+            let redis = exported_module!(redis);
+            engine.register_static_module("redis", redis.into());
         }
     }
 

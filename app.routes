@@ -13,7 +13,7 @@ example() {
 
 #[route("/db")]
 db() {
-   let db = kv::load("test.db");
+   let db = db::kv::load("test.db");
    
    db.set("some.key", json::dump(#{name: "John", id: 50}));
    let data = json::parse(db.get("some.key"));
