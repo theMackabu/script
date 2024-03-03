@@ -13,3 +13,6 @@ pub fn load(path: String) -> PickleDb {
 
     PickleDb::new(path, PickleDbDumpPolicy::AutoDump, method)
 }
+
+// use load to not erase db on every load
+// add .iter() method

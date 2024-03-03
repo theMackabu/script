@@ -32,3 +32,4 @@ mongodb = { version = "2.8.0", features = ["sync"], default-features = false }
 pickledb = { version = "0.5.1", features = ["json", "bincode", "cbor", "yaml"] }
 redis = "0.24.0"
 askama = "0.12.1"
+mime = "0.3.17"

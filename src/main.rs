@@ -7,6 +7,7 @@ use askama::Template;
 use config::structs::Config;
 use lazy_static::lazy_static;
 use macros_rs::{crashln, str, string, ternary};
+use mime::Mime;
 use pickledb::PickleDb;
 use redis::{Client as RedisClient, Commands};
 use regex::{Captures, Error, Regex};
@@ -75,6 +76,23 @@ pub fn response(data: String, content_type: String, status_code: i64) -> (String
     };
 
     (data, content_type, helpers::convert_status(status_code))
+}
+
+pub fn proxy(url: String) -> (String, ContentType, StatusCode) {
+    let client = ReqwestClient::new();
+    let response = match client.get(url).send() {
+        Ok(res) => res,
+        Err(err) => return (err.to_string(), ContentType::plaintext(), StatusCode::GATEWAY_TIMEOUT),
+    };
+
+    let status = response.status();
+    let content_type = response.headers().get("Content-Type").unwrap().to_str().unwrap_or("text/plain").parse::<Mime>().unwrap();
+
+    if status.is_success() {
+        (response.text().unwrap(), ContentType(content_type), status)
+    } else {
+        (response.text().unwrap(), ContentType(content_type), status)
+    }
 }
 
 fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option<Vec<String>> {
@@ -671,18 +689,17 @@ mod http {
 
     pub fn get(url: String) -> Http {
         let client = ReqwestClient::new();
-        let response =
-            match client.get(url).send() {
-                Ok(res) => res,
-                Err(err) => {
-                    return Http {
-                        length: Some(0),
-                        status: 0,
-                        err: Some(err.to_string()),
-                        body: None,
-                    }
+        let response = match client.get(url).send() {
+            Ok(res) => res,
+            Err(err) => {
+                return Http {
+                    length: Some(0),
+                    status: 0,
+                    err: Some(err.to_string()),
+                    body: None,
                 }
-            };
+            }
+        };
 
         if response.status().is_success() {
             Http {
@@ -704,11 +721,10 @@ mod http {
     pub fn post(url: String, data: Map) -> Http {
         let client = ReqwestClient::new();
 
-        let data =
-            match serde_json::to_string(&data) {
-                Ok(result) => result,
-                Err(err) => err.to_string(),
-            };
+        let data = match serde_json::to_string(&data) {
+            Ok(result) => result,
+            Err(err) => err.to_string(),
+        };
 
         let response = match client.post(url).body(data).send() {
             Ok(res) => res,
@@ -874,6 +890,7 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
     scope.push("request", request.to_dynamic());
 
     engine
+        .register_fn("proxy", proxy)
         .register_fn("cwd", file::cwd)
         .register_fn("response", response)
         .register_fn("text", default::text)
@@ -912,11 +929,10 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
 
             if args != "" {
                 let r_path = Regex::new(r"(?m)_arg_(\w+)").unwrap();
-                let key =
-                    r_path.replace_all(&path, |captures: &regex::Captures| {
-                        let key = captures.get(1).map_or("", |m| m.as_str());
-                        format!("{{{key}}}")
-                    });
+                let key = r_path.replace_all(&path, |captures: &regex::Captures| {
+                    let key = captures.get(1).map_or("", |m| m.as_str());
+                    format!("{{{key}}}")
+                });
 
                 routes.insert(string!(key), args.split(",").map(|s| s.to_string().replace(" ", "")).collect());
                 format!("fmt_{path}({args})")

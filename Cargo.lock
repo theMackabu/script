@@ -2388,6 +2388,7 @@ dependencies = [
  "home",
  "lazy_static",
  "macros-rs",
+ "mime",
  "mongodb",
  "peg",
  "pickledb",
