@@ -1,5 +1,5 @@
 use colored::Colorize;
-use macros_rs::{crashln, str, string};
+use macros_rs::fmt::{crashln, str, string};
 use rhai::plugin::*;
 
 use std::{

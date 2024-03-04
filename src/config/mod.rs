@@ -2,7 +2,7 @@ pub mod structs;
 
 use crate::file::{self, exists};
 use colored::Colorize;
-use macros_rs::{crashln, string};
+use macros_rs::fmt::{crashln, string};
 use std::fs;
 use structs::{Config, Settings};
 

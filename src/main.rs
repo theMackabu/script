@@ -6,7 +6,6 @@ mod helpers;
 use askama::Template;
 use config::structs::Config;
 use lazy_static::lazy_static;
-use macros_rs::{crashln, str, string, ternary};
 use mime::Mime;
 use pickledb::PickleDb;
 use redis::{Client as RedisClient, Commands};
@@ -26,6 +25,11 @@ use mongodb::{
     bson::{doc, Document},
     results::{CollectionSpecification, DeleteResult, InsertOneResult, UpdateResult},
     sync::{Client as MongoClient, Collection, Cursor, Database},
+};
+
+use macros_rs::{
+    exp::ternary,
+    fmt::{crashln, str, string},
 };
 
 use actix_web::{
