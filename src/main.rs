@@ -29,10 +29,8 @@ use mongodb::{
 };
 
 use actix_web::{
-    get,
-    http::header::ContentType,
-    http::StatusCode,
-    web::{Data, Path},
+    http::{header::ContentType, StatusCode},
+    web::{self, Data},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 
@@ -799,8 +797,12 @@ mod http {
     }
 }
 
-#[get("{url:.*}")]
-async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> impl Responder {
+async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
+    let url = match req.uri().to_string().strip_prefix("/") {
+        Some(url) => url.to_string(),
+        None => req.uri().to_string(),
+    };
+
     macro_rules! send {
         ($response:expr) => {{
             let (body, content_type, status_code) = $response;
@@ -834,7 +836,7 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
 
     let path = match url.as_str() {
         "" => "_route_index".to_string(),
-        _ => helpers::convert_to_format(&url.clone()),
+        _ => helpers::convert_to_format(&url.to_string()),
     };
 
     fs_pkg.register_into_engine(&mut engine);
@@ -967,6 +969,11 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
         ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard() {").to_string(), result)
     };
 
+    let contents = {
+        let slash = Regex::new(r"%\((.*?)\)").unwrap();
+        slash.replace_all(&contents, |caps: &regex::Captures| format!("${{{}}}", &caps[1])).to_string()
+    };
+
     let mut ast = match engine.compile(&contents) {
         Ok(ast) => ast,
         Err(err) => helpers::error(&engine, &path, err),
@@ -974,7 +981,7 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
 
     ast.set_source(filename.to_string_lossy().to_string());
 
-    if url.clone() == "" && has_index {
+    if url.as_str() == "" && has_index {
         send!(engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, "_route_index", ()).unwrap());
     };
 
@@ -1004,8 +1011,8 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
         let url = url.clone();
         let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
 
-        if url == route {
-            match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::convert_to_format(&url.clone()), ()) {
+        if url.as_str() == route {
+            match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::convert_to_format(&url.to_string()), ()) {
                 Ok(response) => send!(response),
                 Err(err) => {
                     let body = ServerError {
@@ -1018,7 +1025,7 @@ async fn handler(url: Path<String>, req: HttpRequest, config: Data<Config>) -> i
             }
         }
 
-        match match_route(&route, &args, &url) {
+        match match_route(&route, &args, url.as_str()) {
             Some(data) => match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::route_to_fn(&route), data) {
                 Ok(response) => send!(response),
                 Err(err) => {
@@ -1057,7 +1064,7 @@ async fn main() -> std::io::Result<()> {
     env::set_var("RUST_LOG", "INFO");
 
     let config = config::read();
-    let app = || App::new().app_data(Data::new(config::read())).service(handler);
+    let app = || App::new().app_data(Data::new(config::read())).default_service(web::to(handler));
 
     let formatting_layer = BunyanFormattingLayer::new("server".into(), std::io::stdout)
         .skip_fields(vec!["file", "line"].into_iter())

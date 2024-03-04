@@ -86,7 +86,7 @@ name(id, name) {
 
 #[route("/proxy/{arg}")]
 fetch_proxy(arg) {
-   proxy(`https://internal.themackabu.dev/${ arg }`)
+   proxy(`https://internal.themackabu.dev/$(arg)`)
 }
 
 example/json() {
