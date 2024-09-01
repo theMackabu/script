@@ -1,16 +1,18 @@
-pub mod structs;
+use crate::{helpers::prelude::*, structs::config::*};
 
-use crate::file::{self, exists};
 use colored::Colorize;
-use macros_rs::fmt::{crashln, string};
 use pickledb::SerializationMethod;
 use std::fs;
-use structs::{Config, Settings};
+
+use macros_rs::{
+    fmt::{crashln, string},
+    fs::file_exists,
+};
 
 pub fn read() -> Config {
     let config_path = format!("config.toml");
 
-    if !exists::file(config_path.clone()).unwrap() {
+    if !file_exists!(&config_path) {
         let config = Config {
             env: None,
             database: None,
@@ -32,7 +34,7 @@ pub fn read() -> Config {
         tracing::info!(path = config_path, created = true, "config");
     }
 
-    file::read(config_path)
+    read_toml(config_path)
 }
 
 impl Config {

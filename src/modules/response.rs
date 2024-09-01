@@ -1,5 +1,4 @@
 use crate::helpers::convert_status;
-
 use actix_web::http::{header::ContentType, StatusCode};
 use rhai::plugin::*;
 

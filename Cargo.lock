@@ -1651,9 +1651,9 @@ dependencies = [
 
 [[package]]
 name = "macros-rs"
-version = "1.2.2"
+version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad2eda5e29889d2b7602fc6e2e8db2468fda0633aea0108f0469569bbac44b22"
+checksum = "c58aecbe9f397279912daa8bec0c399df037ff111617d844470793f83cc8d850"
 dependencies = [
  "termcolor",
 ]
@@ -2430,7 +2430,6 @@ dependencies = [
  "colored",
  "fancy-regex",
  "home",
- "lazy_static",
  "macros-rs",
  "mime",
  "mongodb",

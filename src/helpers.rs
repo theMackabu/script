@@ -1,7 +1,13 @@
+pub mod file;
+
 use actix_web::http::StatusCode;
 use mongodb::{bson::doc, sync::Database};
 use regex::{Captures, Regex};
 use rhai::{plugin::EvalAltResult, Engine, ParseError, AST};
+
+pub mod prelude {
+    pub use super::file::*;
+}
 
 pub fn rm_first(s: &str) -> &str {
     let mut chars = s.chars();

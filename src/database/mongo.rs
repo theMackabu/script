@@ -1,33 +1,15 @@
-use crate::{config, helpers::collection_exists};
-
+use crate::{config, helpers::collection_exists, structs::modules::*};
 use rhai::{plugin::*, serde::to_dynamic, Array, FnNamespace};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use mongodb::{
     bson::{doc, Document},
     results::{CollectionSpecification, DeleteResult, InsertOneResult, UpdateResult},
-    sync::{Client as MongoClient, Collection, Cursor, Database},
+    sync::{Client as MongoClient, Collection, Cursor},
 };
 
 #[export_module]
 pub mod mongo_db {
-    #[derive(Clone)]
-    pub struct Client {
-        pub client: Option<MongoClient>,
-    }
-
-    #[derive(Clone)]
-    pub struct Mongo {
-        pub db: Option<Database>,
-    }
-
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    pub struct MongoDynamic(Dynamic);
-
-    unsafe impl Send for MongoDynamic {}
-    unsafe impl Sync for MongoDynamic {}
-
     trait MongoVec {
         fn into_vec(self) -> Vec<MongoDynamic>;
     }
@@ -41,12 +23,12 @@ pub mod mongo_db {
         fn into(self) -> MongoDynamic { MongoDynamic(self) }
     }
 
-    impl FromIterator<MongoDynamic> for Array {
-        fn from_iter<I: IntoIterator<Item = MongoDynamic>>(iter: I) -> Self { iter.into_iter().map(|m| m.0).collect() }
-    }
-
     impl MongoVec for Array {
         fn into_vec(self) -> Vec<MongoDynamic> { self.into_iter().map(|m| m.into_map()).collect() }
+    }
+
+    impl FromIterator<MongoDynamic> for Array {
+        fn from_iter<I: IntoIterator<Item = MongoDynamic>>(iter: I) -> Self { iter.into_iter().map(|m| m.0).collect() }
     }
 
     impl MongoDocument for Dynamic {

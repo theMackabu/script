@@ -18,23 +18,23 @@ pub struct Settings {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Database {
-    pub kv: Option<KV>,
-    pub mongo: Option<Mongo>,
-    pub redis: Option<Redis>,
+    pub kv: Option<KVConfig>,
+    pub mongo: Option<MongoConfig>,
+    pub redis: Option<RedisConfig>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct KV {
+pub struct KVConfig {
     pub method: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Redis {
+pub struct RedisConfig {
     pub server: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Mongo {
+pub struct MongoConfig {
     pub server: Option<String>,
     pub advanced: Option<MongoAdvanced>,
 }

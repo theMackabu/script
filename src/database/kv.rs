@@ -1,5 +1,4 @@
 use crate::config;
-
 use macros_rs::{fmt::string, fs::file_exists};
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use rhai::{plugin::*, FnNamespace};

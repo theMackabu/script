@@ -1,14 +1,13 @@
 mod config;
 mod database;
-mod file;
 mod helpers;
 mod modules;
+mod structs;
 
+use helpers::prelude::*;
 use modules::prelude::*;
+use structs::{config::*, template::*};
 
-use askama::Template;
-use config::structs::Config;
-use lazy_static::lazy_static;
 use mime::Mime;
 
 use regex::{Captures, Error, Regex};
@@ -25,6 +24,7 @@ use rhai_url::UrlPackage;
 use macros_rs::{
     exp::ternary,
     fmt::{crashln, str, string},
+    obj::lazy_lock,
     os::set_env_sync,
 };
 
@@ -34,30 +34,13 @@ use actix_web::{
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 
-#[derive(Template)]
-#[template(path = "error.html")]
-struct ServerError {
-    error: String,
-    context: Vec<(String, String)>,
-}
-
-#[derive(Template)]
-#[template(path = "message.html")]
-struct Message<'a> {
-    code: u16,
-    note: &'a str,
-    error: &'a str,
-    message: String,
-}
-
-// convert to peg
-lazy_static! {
-    static ref R_INDEX: Result<Regex, Error> = Regex::new(r"index\s*\{");
-    static ref R_ERR: Result<Regex, Error> = Regex::new(r"(\b\d{3})\s*\{");
-    static ref R_FN: Result<Regex, Error> = Regex::new(r"(\w+)\((.*?)\)\s*\{");
-    static ref R_DOT: Result<Regex, Error> = Regex::new(r"\.(\w+)\((.*?)\)\s*\{");
-    static ref R_WILD: Result<Regex, Error> = Regex::new(r"\*\s*\{|wildcard\s*\{");
-    static ref R_SLASH: Result<Regex, Error> = Regex::new(r"(?m)\/(?=.*\((.*?)\)\s*\{[^{]*$)");
+lazy_lock! {
+    static R_INDEX: Result<Regex, Error> = Regex::new(r"index\s*\{");
+    static R_ERR: Result<Regex, Error> = Regex::new(r"(\b\d{3})\s*\{");
+    static R_FN: Result<Regex, Error> = Regex::new(r"(\w+)\((.*?)\)\s*\{");
+    static R_DOT: Result<Regex, Error> = Regex::new(r"\.(\w+)\((.*?)\)\s*\{");
+    static R_WILD: Result<Regex, Error> = Regex::new(r"\*\s*\{|wildcard\s*\{");
+    static R_SLASH: Result<Regex, Error> = Regex::new(r"(?m)\/(?=.*\((.*?)\)\s*\{[^{]*$)");
 }
 
 pub fn response(data: String, content_type: String, status_code: i64) -> (String, ContentType, StatusCode) {
@@ -169,7 +152,7 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
 
     let json = exported_module!(json);
     let http = exported_module!(http);
-    let exists = exported_module!(file::exists);
+    let exists = exported_module!(exists);
 
     let mut engine = Engine::new();
     let mut scope = Scope::new();
@@ -232,8 +215,8 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
     scope.push("request", request.to_dynamic());
 
     engine
+        .register_fn("cwd", cwd)
         .register_fn("proxy", proxy)
-        .register_fn("cwd", file::cwd)
         .register_fn("response", response)
         .register_fn("text", default::text)
         .register_fn("json", default::json)

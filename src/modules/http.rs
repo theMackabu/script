@@ -1,3 +1,4 @@
+use crate::structs::modules::*;
 use macros_rs::fmt::{str, string};
 use reqwest::blocking::Client as ReqwestClient;
 use rhai::{plugin::*, FnNamespace, Map};
@@ -5,14 +6,6 @@ use smartstring::alias::String as SmString;
 
 #[export_module]
 pub mod http {
-    #[derive(Clone)]
-    pub struct Http {
-        pub length: Option<u64>,
-        pub status: u16,
-        pub err: Option<String>,
-        pub body: Option<String>,
-    }
-
     impl From<Http> for Map {
         fn from(http: Http) -> Self {
             let mut map = Map::new();
