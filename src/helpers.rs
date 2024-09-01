@@ -1,6 +1,7 @@
 use actix_web::http::StatusCode;
+use mongodb::{bson::doc, sync::Database};
 use regex::{Captures, Regex};
-use rhai::{Engine, ParseError, AST};
+use rhai::{plugin::EvalAltResult, Engine, ParseError, AST};
 
 pub fn rm_first(s: &str) -> &str {
     let mut chars = s.chars();
@@ -26,6 +27,15 @@ pub fn route_to_fn(input: &str) -> String {
         "_route_fmt_{}",
         re_dot.replace_all(&result.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
     )
+}
+
+pub fn collection_exists(d: &Database, name: &String) -> Result<bool, Box<EvalAltResult>> {
+    let filter = doc! { "name": &name };
+
+    match d.list_collection_names(Some(filter)) {
+        Err(err) => Err(err.to_string().into()),
+        Ok(list) => Ok(list.into_iter().any(|col| col == *name)),
+    }
 }
 
 pub fn convert_status(code: i64) -> StatusCode {

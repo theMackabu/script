@@ -3,6 +3,7 @@ pub mod structs;
 use crate::file::{self, exists};
 use colored::Colorize;
 use macros_rs::fmt::{crashln, string};
+use pickledb::SerializationMethod;
 use std::fs;
 use structs::{Config, Settings};
 
@@ -36,4 +37,15 @@ pub fn read() -> Config {
 
 impl Config {
     pub fn get_address(&self) -> (String, u16) { (self.settings.address.clone(), self.settings.port.clone()) }
+
+    pub fn kv_serialization_method(&self) -> Option<SerializationMethod> {
+        let database = self.database.clone()?.kv?;
+
+        match &*database.method {
+            "json" | "default" => Some(SerializationMethod::Json),
+            "yaml" | "yml" => Some(SerializationMethod::Yaml),
+            "binary" | "bin" => Some(SerializationMethod::Bin),
+            _ => Some(SerializationMethod::Bin),
+        }
+    }
 }
