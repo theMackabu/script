@@ -86,7 +86,7 @@ name(id, name) {
 
 #[route("/proxy/{arg}")]
 fetch_proxy(arg) {
-   proxy(`https://internal.themackabu.dev/$(arg)`)
+   proxy(`https://www.google.com/search?q=$(arg)`)
 }
 
 example/json() {
@@ -107,7 +107,7 @@ example/json() {
 example/post/bin() {
    let body = #{ 
       hello: "world",
-      url: url,
+      url: request.url,
    };
    
    json(http::post("https://httpbin.org/post", body).raw())

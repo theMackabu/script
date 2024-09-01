@@ -19,3 +19,7 @@ tests
 bin
 config.toml
 test.db
+
+# fleet
+fleet.toml
+.cargo

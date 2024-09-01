@@ -13,7 +13,7 @@ use regex::{Captures, Error, Regex};
 use reqwest::blocking::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
 use smartstring::alias::String as SmString;
-use std::{cell::RefCell, collections::BTreeMap, env, fs, sync::Arc};
+use std::{cell::RefCell, collections::BTreeMap, fs, sync::Arc};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
@@ -30,6 +30,7 @@ use mongodb::{
 use macros_rs::{
     exp::ternary,
     fmt::{crashln, str, string},
+    os::set_env_sync,
 };
 
 use actix_web::{
@@ -974,7 +975,7 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
     };
 
     let contents = {
-        let slash = Regex::new(r"%\((.*?)\)").unwrap();
+        let slash = Regex::new(r"\$\((.*?)\)").unwrap();
         slash.replace_all(&contents, |caps: &regex::Captures| format!("${{{}}}", &caps[1])).to_string()
     };
 
@@ -1065,7 +1066,7 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    env::set_var("RUST_LOG", "INFO");
+    set_env_sync!(RUST_LOG = "info");
 
     let config = config::read();
     let app = || App::new().app_data(Data::new(config::read())).default_service(web::to(handler));
