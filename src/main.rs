@@ -2,6 +2,7 @@ mod config;
 mod database;
 mod helpers;
 mod modules;
+mod routes;
 mod structs;
 
 use helpers::prelude::*;
@@ -13,7 +14,7 @@ use mime::Mime;
 use regex::{Captures, Error, Regex};
 use reqwest::blocking::Client as ReqwestClient;
 use smartstring::alias::String as SmString;
-use std::{collections::BTreeMap, fs};
+use std::{collections::HashMap, fs};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
 
@@ -23,7 +24,7 @@ use rhai_url::UrlPackage;
 
 use macros_rs::{
     exp::ternary,
-    fmt::{crashln, str, string},
+    fmt::{crashln, string},
     obj::lazy_lock,
     os::set_env_sync,
 };
@@ -37,9 +38,9 @@ use actix_web::{
 lazy_lock! {
     static R_INDEX: Result<Regex, Error> = Regex::new(r"index\s*\{");
     static R_ERR: Result<Regex, Error> = Regex::new(r"(\b\d{3})\s*\{");
-    static R_FN: Result<Regex, Error> = Regex::new(r"(\w+)\((.*?)\)\s*\{");
     static R_DOT: Result<Regex, Error> = Regex::new(r"\.(\w+)\((.*?)\)\s*\{");
     static R_WILD: Result<Regex, Error> = Regex::new(r"\*\s*\{|wildcard\s*\{");
+    static R_FN: Result<Regex, Error> = Regex::new(r"([\w#:\-@!&^~]+)\((.*?)\)\s*\{");
     static R_SLASH: Result<Regex, Error> = Regex::new(r"(?m)\/(?=.*\((.*?)\)\s*\{[^{]*$)");
 }
 
@@ -76,6 +77,13 @@ pub fn proxy(url: String) -> (String, ContentType, StatusCode) {
     }
 }
 
+fn parse_bool(s: &str) -> bool {
+    match s.trim().to_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => true,
+        _ => false,
+    }
+}
+
 fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option<Vec<String>> {
     let mut matched_placeholders = Vec::new();
 
@@ -97,6 +105,31 @@ fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option
     }
 
     Some(matched_placeholders)
+}
+
+pub fn replace_chars(input: &str) -> String {
+    let replacements = HashMap::from([
+        ('#', "__fhas"),
+        (':', "__fcol"),
+        ('-', "__fdas"),
+        ('@', "__fats"),
+        ('!', "__fexl"),
+        ('&', "__famp"),
+        ('^', "__fcar"),
+        ('~', "__ftil"),
+    ]);
+
+    let mut result = String::with_capacity(input.len());
+
+    for c in input.chars() {
+        if let Some(replacement) = replacements.get(&c) {
+            result.push_str(replacement);
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }
 
 fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) -> Option<String> {
@@ -141,10 +174,11 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
     }
 
     if url.as_str() == "favicon.ico" {
+        // remove this
         return HttpResponse::Ok().body("");
     }
 
-    let mut routes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut routes: HashMap<String, Vec<String>> = HashMap::new();
 
     let filename = &config.workers.get(0).unwrap();
     let fs_pkg = FilesystemPackage::new();
@@ -234,38 +268,85 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
     let has_wildcard = R_WILD.as_ref().unwrap().is_match(&contents).unwrap();
     let has_index = R_INDEX.as_ref().unwrap().is_match(&contents).unwrap();
 
+    fn parse_cfg(cfg_str: &str) -> HashMap<String, String> {
+        cfg_str
+            .split(',')
+            .filter_map(|pair| {
+                let mut parts = pair.split('=');
+                if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                    Some((key.trim().to_string(), value.trim().trim_matches('"').to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn extract_route(input: &str, route_name: Option<&str>) -> Vec<routes::Route> {
+        let re = Regex::new(r"(?m)^\s*#\[route\(([^)]+)\)(?:,\s*cfg\(([^)]+)\))?\]\s*([^\(]+)\([^)]*\)\s*\{([^}]+)\}").unwrap();
+
+        re.captures_iter(input)
+            .filter_map(|captures| {
+                let cap = captures.unwrap();
+
+                let route = helpers::rm_first(cap[1].trim().trim_matches('"')).to_string();
+                if route_name.map_or(true, |name| route == name) {
+                    let cfg = cap.get(2).map(|m| parse_cfg(m.as_str()));
+                    let fn_name = cap[3].trim().to_string();
+                    let fn_body = cap[4].trim().to_string();
+                    let fn_fmt = "".to_string();
+
+                    Some(routes::Route { route, cfg, fn_name, fn_body, fn_fmt })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    let route_data = extract_route(&contents, None);
+
     let contents = {
         let pattern = r#"\{([^{}\s]+)\}"#;
+        let pattern_rm_config = r#",?\s*cfg\([^)]*\)"#;
         let pattern_combine = r#"(?m)^_route/(.*)\n(.*?)\((.*?)\)"#;
 
         let re = Regex::new(pattern).unwrap();
         let re_combine = Regex::new(pattern_combine).unwrap();
+        let re_rm_config = Regex::new(pattern_rm_config).unwrap();
 
         let result = re.replace_all(&contents, |captures: &regex::Captures| {
             let content = captures.get(1).map_or("", |m| m.as_str());
             format!("_arg_{content}")
         });
 
-        let output = result.replace("#[route(\"", "_route").replace("\")]", "");
+        let result = re_rm_config.replace_all(&result, "");
+        let result = result.replace("#[route(\"", "_route").replace("\")]", "");
 
-        re_combine.replace_all(str!(output), |captures: &regex::Captures| {
-            let path = captures.get(1).map_or("", |m| m.as_str());
-            let args = captures.get(3).map_or("", |m| m.as_str());
+        let new_result_fmt = re_combine
+            .replace_all(&result, |captures: &regex::Captures| {
+                let path = captures.get(1).map_or("", |m| m.as_str());
+                let args = captures.get(3).map_or("", |m| m.as_str());
 
-            if args != "" {
-                let r_path = Regex::new(r"(?m)_arg_(\w+)").unwrap();
-                let key = r_path.replace_all(&path, |captures: &regex::Captures| {
-                    let key = captures.get(1).map_or("", |m| m.as_str());
-                    format!("{{{key}}}")
-                });
+                if args != "" {
+                    let r_path = Regex::new(r"(?m)_arg_(\w+)").unwrap();
+                    let key = r_path.replace_all(&path, |captures: &regex::Captures| {
+                        let key = captures.get(1).map_or("", |m| m.as_str());
+                        format!("{{{key}}}")
+                    });
 
-                routes.insert(string!(key), args.split(",").map(|s| s.to_string().replace(" ", "")).collect());
-                format!("fmt_{path}({args})")
-            } else {
-                routes.insert(string!(path), vec![]);
-                format!("{path}()")
-            }
-        })
+                    routes.insert(string!(key), args.split(",").map(|s| s.to_string().replace(" ", "")).collect());
+                    format!("fmt_{path}({args})")
+                } else {
+                    routes.insert(string!(path), vec![]);
+                    format!("{path}()")
+                }
+            })
+            .into_owned();
+
+        std::mem::drop(result);
+
+        new_result_fmt
     };
 
     // cache contents until file change
@@ -287,7 +368,15 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
             .unwrap()
             .replace_all(&result, |captures: &Captures| format!("__d{}", helpers::rm_first(&captures[0])))
             .to_string();
-        let result = R_FN.as_ref().unwrap().replace_all(&result, |captures: &Captures| format!("fn _route_{}", &captures[0])).to_string();
+
+        let result = R_FN
+            .as_ref()
+            .unwrap()
+            .replace_all(&result, |captures: &Captures| {
+                let fmt = replace_chars(&captures[0]);
+                format!("fn _route_{fmt}")
+            })
+            .to_string();
 
         ternary!(has_wildcard, R_WILD.as_ref().unwrap().replace_all(&result, "fn _wildcard() {").to_string(), result)
     };
@@ -361,6 +450,36 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
                 }
             },
             None => {}
+        }
+    }
+
+    for data in route_data {
+        let name = data.route;
+
+        let cfg = match data.cfg {
+            Some(cfg) => cfg,
+            None => HashMap::new(),
+        };
+
+        for (item, val) in cfg {
+            match item.as_str() {
+                "wildcard" => {
+                    if url.splitn(2, '/').next().unwrap_or(&url) == name && parse_bool(&val) {
+                        match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::convert_to_format(&name), ()) {
+                            Ok(response) => send!(response),
+                            Err(err) => {
+                                let body = ServerError {
+                                    error: err.to_string().replace("\n", "<br>"),
+                                    context: extract_context(contents, err.to_string()),
+                                };
+
+                                return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(body.render().unwrap());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
 

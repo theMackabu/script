@@ -11,6 +11,11 @@ example() {
    html(http::get("https://example.org").body)
 }
 
+#[route("/long"), cfg(wildcard = true)]
+wild_test() {
+   text("I am a wildcard route")
+}
+
 #[route("/db")]
 db() {
    let db = kv::load("test.db");

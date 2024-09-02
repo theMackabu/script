@@ -17,10 +17,12 @@ pub fn rm_first(s: &str) -> &str {
 
 pub fn convert_to_format(input: &str) -> String {
     let re = Regex::new(r"\.(\w+)").unwrap();
+    let input = super::replace_chars(input);
     format!("_route_{}", re.replace_all(&input.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0]))))
 }
 
 pub fn route_to_fn(input: &str) -> String {
+    let input = super::replace_chars(input);
     let re = Regex::new(r#"\{([^{}\s]+)\}"#).unwrap();
     let re_dot = Regex::new(r"\.(\w+)").unwrap();
 

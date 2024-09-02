@@ -1,7 +1,11 @@
 # src
 build
 target
+
+# debug
 tests
+test.db
+test.html
 
 # maid
 .maid/cache
@@ -17,8 +21,8 @@ tests
 
 # bin
 bin
+todo.md
 config.toml
-test.db
 
 # fleet
 fleet.toml
