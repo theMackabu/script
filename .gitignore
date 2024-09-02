@@ -22,6 +22,7 @@ test.html
 # bin
 bin
 todo.md
+.script
 config.toml
 
 # fleet

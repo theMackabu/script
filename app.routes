@@ -2,7 +2,7 @@ index {
    text(":3\nwelcome to the root")
 }
 
-hello() {
+hello {
    response("Hello World!", "text", 200)
 }
 
@@ -91,10 +91,10 @@ name(id, name) {
 
 #[route("/proxy/{arg}")]
 fetch_proxy(arg) {
-   proxy(`https://www.google.com/search?q=$(arg)`)
+   proxy(`https://www.google.com/search?q=${arg}`)
 }
 
-example/json() {
+example/json {
    let res = http::get("https://httpbin.org/json");
    let body = #{ 
       response: res.json(),
@@ -109,7 +109,7 @@ example/json() {
    json(body)
 }
 
-example/post/bin() {
+example/post/bin {
    let body = #{ 
       hello: "world",
       url: request.url,
@@ -118,7 +118,7 @@ example/post/bin() {
    json(http::post("https://httpbin.org/post", body).raw())
 }
 
-test.json() {
+test.json {
    let res = #{
        hello: "world",
        info: #{
@@ -132,7 +132,7 @@ test.json() {
    json(res)
 }
 
-test/loadfile() {
+test/loadfile {
    let file = open_file("test.html");
    html(file.read_string())
 }
@@ -143,5 +143,5 @@ test/loadfile() {
 }
 
 404 {
-   text("404 page")
+   text("404 page");
 }

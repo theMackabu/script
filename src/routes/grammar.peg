@@ -1,0 +1,158 @@
+grammar = { SOI ~ (route_definition | function_def | index | not_found | wildcard)* ~ EOI }
+
+route_definition = { 
+	 route_attr? ~ function_def
+}
+
+function_def = { 
+	 route_name ~ ("(" ~ parameters? ~ ")")? ~ block
+}
+
+index = {
+	 "index" ~ block
+}
+
+wildcard = {
+	 "*" ~ block
+}
+
+not_found = {
+	 "404" ~ block
+}
+
+route_attr = { 
+	 "#" ~ "[" ~ "route" ~ "(" ~ string_literal ~ ")" ~ 
+	 ("," ~ cfg_block)? ~ 
+	 "]" 
+}
+
+cfg_block = { 
+	 "cfg" ~ "(" ~ cfg_entries ~ ")"
+}
+
+cfg_entries = {
+	 cfg_entry ~ ("," ~ cfg_entry)* ~ ","?
+}
+
+cfg_entry = {
+	 identifier ~ "=" ~ (boolean | string_literal | number)
+}
+
+route_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "/" | ".")* }
+
+parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
+
+parameter = @{ identifier }
+
+block = {
+	 "{" ~ statement* ~ "}"
+}
+
+statement = {
+	 let_statement |
+	 expression_statement |
+	 assignment |
+	 if_statement |
+	 for_statement |
+	 while_statement |
+	 return_statement |
+	 block
+}
+
+let_statement = {
+	 "let" ~ identifier ~ ("=" ~ expression)? ~ ";"
+}
+
+expression_statement = {
+	 expression ~ ";"?
+}
+
+assignment = {
+	 identifier ~ "=" ~ expression ~ ";"
+}
+
+if_statement = {
+	 "if" ~ expression ~ block ~ ("else" ~ (if_statement | block))?
+}
+
+for_statement = {
+	 "for" ~ identifier ~ "in" ~ expression ~ block
+}
+
+while_statement = {
+	 "while" ~ expression ~ block
+}
+
+return_statement = {
+	 "return" ~ expression? ~ ";"?
+}
+
+expression = { 
+	 logical_expr
+}
+
+logical_expr = {
+	 comparison_expr ~ (("&&" | "||") ~ comparison_expr)*
+}
+
+comparison_expr = {
+	 arithmetic_expr ~ (("==" | "!=" | "<" | ">" | "<=" | ">=") ~ arithmetic_expr)*
+}
+
+arithmetic_expr = {
+	 term ~ (("+" | "-") ~ term)*
+}
+
+term = {
+	 factor ~ (("*" | "/" | "%") ~ factor)*
+}
+
+factor = {
+	 unary_expr |
+	 "(" ~ expression ~ ")" |
+	 call_chain |
+	 object |
+	 array |
+	 literal
+}
+
+unary_expr = {
+	 ("-" | "!") ~ factor
+}
+
+call_chain = {
+	 (identifier | literal) ~
+	 (
+		  "::" ~ identifier |
+		  "." ~ identifier |
+		  arguments
+	 )* ~
+	 arguments?
+}
+
+arguments = {
+	 "(" ~ (expression ~ ("," ~ expression)*)? ~ ","? ~ ")"
+}
+
+object = { 
+	 "#{" ~ (object_entry ~ ("," ~ object_entry)*)? ~ ","? ~ "}"
+}
+
+object_entry = { (identifier | string_literal) ~ ":" ~ expression }
+
+array = { 
+	 "[" ~ (expression ~ ("," ~ expression)*)? ~ ","? ~ "]"
+}
+
+literal = { number | string_literal | boolean | object | array }
+
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ("e" ~ "-"? ~ ASCII_DIGIT+)? }
+
+string_literal = @{ ("\"" ~ (!"\"" ~ ANY)* ~ "\"") | ("`" ~ (!"`" ~ ANY)* ~ "`") }
+
+boolean = { "true" | "false" }
+
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }

@@ -1,5 +1,6 @@
 mod config;
 mod database;
+mod globals;
 mod helpers;
 mod modules;
 mod routes;
@@ -264,6 +265,8 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
         Err(err) => crashln!("Error reading script file: {}\n{}", filename.to_string_lossy(), err),
     };
 
+    routes::parse::try_parse(&contents);
+
     let has_error_page = R_ERR.as_ref().unwrap().is_match(&contents).unwrap();
     let has_wildcard = R_WILD.as_ref().unwrap().is_match(&contents).unwrap();
     let has_index = R_INDEX.as_ref().unwrap().is_match(&contents).unwrap();
@@ -281,30 +284,6 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
             })
             .collect()
     }
-
-    fn extract_route(input: &str, route_name: Option<&str>) -> Vec<routes::Route> {
-        let re = Regex::new(r"(?m)^\s*#\[route\(([^)]+)\)(?:,\s*cfg\(([^)]+)\))?\]\s*([^\(]+)\([^)]*\)\s*\{([^}]+)\}").unwrap();
-
-        re.captures_iter(input)
-            .filter_map(|captures| {
-                let cap = captures.unwrap();
-
-                let route = helpers::rm_first(cap[1].trim().trim_matches('"')).to_string();
-                if route_name.map_or(true, |name| route == name) {
-                    let cfg = cap.get(2).map(|m| parse_cfg(m.as_str()));
-                    let fn_name = cap[3].trim().to_string();
-                    let fn_body = cap[4].trim().to_string();
-                    let fn_fmt = "".to_string();
-
-                    Some(routes::Route { route, cfg, fn_name, fn_body, fn_fmt })
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    let route_data = extract_route(&contents, None);
 
     let contents = {
         let pattern = r#"\{([^{}\s]+)\}"#;
@@ -453,35 +432,35 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
         }
     }
 
-    for data in route_data {
-        let name = data.route;
-
-        let cfg = match data.cfg {
-            Some(cfg) => cfg,
-            None => HashMap::new(),
-        };
-
-        for (item, val) in cfg {
-            match item.as_str() {
-                "wildcard" => {
-                    if url.splitn(2, '/').next().unwrap_or(&url) == name && parse_bool(&val) {
-                        match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::convert_to_format(&name), ()) {
-                            Ok(response) => send!(response),
-                            Err(err) => {
-                                let body = ServerError {
-                                    error: err.to_string().replace("\n", "<br>"),
-                                    context: extract_context(contents, err.to_string()),
-                                };
-
-                                return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(body.render().unwrap());
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    //     for data in route_data {
+    //         let name = data.route;
+    //
+    //         let cfg = match data.cfg {
+    //             Some(cfg) => cfg,
+    //             None => HashMap::new(),
+    //         };
+    //
+    //         for (item, val) in cfg {
+    //             match item.as_str() {
+    //                 "wildcard" => {
+    //                     if url.splitn(2, '/').next().unwrap_or(&url) == name && parse_bool(&val) {
+    //                         match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, helpers::convert_to_format(&name), ()) {
+    //                             Ok(response) => send!(response),
+    //                             Err(err) => {
+    //                                 let body = ServerError {
+    //                                     error: err.to_string().replace("\n", "<br>"),
+    //                                     context: extract_context(contents, err.to_string()),
+    //                                 };
+    //
+    //                                 return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(body.render().unwrap());
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //                 _ => {}
+    //             }
+    //         }
+    //     }
 
     if has_wildcard || has_error_page {
         let (body, content_type, status_code) = engine
@@ -504,6 +483,7 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     set_env_sync!(RUST_LOG = "info");
+    globals::init();
 
     let config = config::read();
     let app = || App::new().app_data(Data::new(config::read())).default_service(web::to(handler));
