@@ -39,7 +39,7 @@ redis() {
 #[route("/mongo/list")]
 mongo() {
    let conn = mongo::connect();
-   
+      
    json(conn.list())
 }
 
