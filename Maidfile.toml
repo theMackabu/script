@@ -1,6 +1,6 @@
 [project]
 name = "script"
-version = "0.4.1"
+version = "0.5.0"
 
 [tasks]
 clean = { script = ["rm -rf bin", "mkdir bin"] }
