@@ -79,6 +79,11 @@ example(id) {
    text("base: " + id)
 }
 
+#[route("/program@{version}")]
+get_ver(version) {
+   text(`you are viewing program at v${version}`)
+}
+
 #[route("/example/{id}/test")]
 example_test(id) {
    text("sub: " + id)

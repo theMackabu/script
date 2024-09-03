@@ -13,12 +13,12 @@ index {
 }
 
 // this is /hello
-hello() {
+hello {
    text("Hello World!")
 }
 
 // get data from another website, then return as json
-tests/fetch() {
+tests/fetch {
    json(http::get("https://httpbin.org/json").json())
 }
 
@@ -33,7 +33,7 @@ For more syntax, check out `app.routes`
 
 ```bash
 # Start the server
-script start <filename>
+script start <config_path> # (default config.toml)
 ```
 
 For more commands, check out `script --help`

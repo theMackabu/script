@@ -11,7 +11,10 @@ use smartstring::{LazyCompact, SmartString};
 use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
-use tokio::fs::{read, write};
+use tokio::{
+    fs::{read, write},
+    sync::mpsc,
+};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -26,6 +29,7 @@ pub type RtIndex = (String, Route);
 pub type RtData = SmartString<LazyCompact>;
 pub type RtArgs = Option<Vec<RtData>>;
 pub type RtConfig = Option<HashMap<String, String>>;
+pub type RtSearchIndex = Option<(Route, Vec<String>)>;
 pub type RtGlobalIndex = Arc<Mutex<DashMap<String, RouteContainer>>>;
 
 pub enum RtKind {
@@ -78,72 +82,114 @@ async fn get_fallback_route() -> Option<(Route, Vec<String>)> {
     None
 }
 
-async fn match_route(route_template: &str, placeholders: &Vec<RtData>, url: &str) -> Option<Vec<String>> {
-    let mut matched_placeholders = Vec::new();
-
-    let route_segments: Vec<&str> = route_template.split('/').collect();
-    let url_segments: Vec<&str> = url.split('/').collect();
+async fn match_route(route_template: &str, placeholders: &[RtData], url: &str) -> Option<Vec<String>> {
+    let route_segments: Vec<String> = route_template.split('/').map(String::from).collect();
+    let url_segments: Vec<String> = url.split('/').map(String::from).collect();
 
     if route_segments.len() != url_segments.len() {
         return None;
     }
 
-    for (route_segment, url_segment) in route_segments.iter().zip(url_segments.iter()) {
-        if let Some(placeholder_value) = match_segment(route_segment, url_segment, placeholders).await {
-            if !placeholder_value.is_empty() {
-                matched_placeholders.push(placeholder_value);
+    let segments_count = route_segments.len();
+    let (tx, mut rx) = mpsc::channel(route_segments.len());
+
+    for (i, (route_segment, url_segment)) in route_segments.into_iter().zip(url_segments.into_iter()).enumerate() {
+        let tx = tx.clone();
+        let placeholders = placeholders.to_vec();
+        tokio::spawn(async move {
+            let result = match_segment(&route_segment, &url_segment, &placeholders);
+            let _ = tx.send((i, result)).await;
+        });
+    }
+
+    let mut matched_placeholders = vec![None; segments_count];
+    let mut matched_count = 0;
+
+    while let Some((index, result)) = rx.recv().await {
+        match result {
+            Some(values) => {
+                matched_placeholders[index] = Some(values);
+                matched_count += 1;
+                if matched_count == segments_count {
+                    break;
+                }
             }
-        } else {
-            return None;
+            None => return None,
         }
     }
 
-    Some(matched_placeholders)
+    Some(matched_placeholders.into_iter().flatten().flatten().collect())
 }
 
-async fn match_segment<'a>(route_segment: &'a str, url_segment: &'a str, placeholders: &Vec<RtData>) -> Option<String> {
-    if route_segment.starts_with('{') && route_segment.ends_with('}') {
-        let placeholder = route_segment[1..route_segment.len() - 1].into();
-        if placeholders.contains(&placeholder) {
-            Some(url_segment.to_string())
-        } else {
-            None
+fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[RtData]) -> Option<Vec<String>> {
+    let mut result = Vec::new();
+    let mut route_parts = route_segment.split('{');
+    let mut url_chars = url_segment.chars().peekable();
+
+    if let Some(prefix) = route_parts.next() {
+        if !url_segment.starts_with(prefix) {
+            return None;
         }
-    } else if route_segment == url_segment {
-        Some("".to_string())
+        for _ in 0..prefix.len() {
+            url_chars.next();
+        }
+    }
+
+    for part in route_parts {
+        let (placeholder, suffix) = part.split_once('}')?;
+        if !placeholders.contains(&RtData::from(placeholder)) {
+            return None;
+        }
+
+        let mut value = String::new();
+        while let Some(&c) = url_chars.peek() {
+            if suffix.starts_with(c) {
+                break;
+            }
+            value.push(url_chars.next().unwrap());
+        }
+        result.push(value);
+
+        for expected_char in suffix.chars() {
+            if url_chars.next() != Some(expected_char) {
+                return None;
+            }
+        }
+    }
+
+    if url_chars.next().is_some() {
+        None
     } else {
-        let route_parts: Vec<&str> = route_segment.split('.').collect();
-        let url_parts: Vec<&str> = url_segment.split('.').collect();
-        if route_parts.len() == url_parts.len() && route_parts.last() == url_parts.last() {
-            Box::pin(match_segment(route_parts[0], url_parts[0], placeholders)).await
-        } else {
-            None
-        }
+        Some(result)
     }
 }
 
 impl Route {
     pub fn default() -> Self { Default::default() }
 
-    pub async fn search_for(url: &str) -> Option<(Route, Vec<String>)> {
+    pub async fn search_for(url: String) -> RtSearchIndex {
         let index = ROUTES_INDEX.lock().await;
+        let (tx, mut rx) = mpsc::channel::<RtSearchIndex>(index.len());
 
         for entry in index.iter() {
             let (_, route_container) = entry.pair();
-            let route_template = &route_container.inner.route;
 
-            let placeholders = match &route_container.inner.args {
-                Some(args) => args,
-                None => &vec![],
-            };
+            let route_template = route_container.inner.route.to_owned();
+            let placeholders = route_container.inner.args.to_owned().unwrap_or_default();
+            let route_clone = route_container.inner.to_owned();
 
-            if let Some(matched_values) = match_route(route_template, &placeholders, url).await {
-                println!("found: {url}");
-                return Some((route_container.inner.clone(), matched_values));
-            }
+            let tx = tx.to_owned();
+            let url = url.to_owned();
+
+            tokio::spawn(async move {
+                if let Some(matched_values) = match_route(&route_template, &placeholders, &url).await {
+                    let _ = tx.send(Some((route_clone, matched_values))).await;
+                }
+            });
         }
 
-        get_fallback_route().await
+        drop(tx);
+        rx.recv().await.flatten().or_else(|| futures::executor::block_on(get_fallback_route()))
     }
 
     pub async fn cleanup() -> std::io::Result<()> {

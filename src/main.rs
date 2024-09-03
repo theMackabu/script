@@ -220,13 +220,13 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
 
             match Route::get(&matched_url).await {
                 Ok(matched) => (matched, vec![]),
-                Err(err) => match Route::search_for(&matched_url).await {
+                Err(err) => match Route::search_for(matched_url).await {
                     Some(matched) => matched,
                     None => error!(err),
                 },
             }
         }
-        Err(err) => match Route::search_for(&url).await {
+        Err(err) => match Route::search_for(url.to_owned()).await {
             Some(matched) => matched,
             None => error!(err),
         },
