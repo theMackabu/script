@@ -35,7 +35,7 @@ pub enum RtKind {
 }
 
 pub struct RouteContainer {
-    inner: Route,
+    pub inner: Route,
     present_in_current_update: bool,
 }
 
@@ -58,7 +58,27 @@ lazy_lock! {
     pub static ROUTES_INDEX: RtGlobalIndex = Arc::new(Mutex::new(DashMap::new()));
 }
 
-fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option<Vec<String>> {
+async fn get_fallback_route() -> Option<(Route, Vec<String>)> {
+    let fallback_routes = [("not_found", "__handler_not_found"), ("wildcard", "__handler_wildcard")];
+
+    let page_exists = |key| match key {
+        "not_found" => file_exists!(&global!("dirs.handler", "/not_found")),
+        "wildcard" => file_exists!(&global!("dirs.handler", "/wildcard")),
+        _ => false,
+    };
+
+    for (page, handler) in fallback_routes {
+        if page_exists(page) {
+            if let Ok(route) = Route::get(handler).await {
+                return Some((route, vec![]));
+            }
+        }
+    }
+
+    None
+}
+
+async fn match_route(route_template: &str, placeholders: &Vec<RtData>, url: &str) -> Option<Vec<String>> {
     let mut matched_placeholders = Vec::new();
 
     let route_segments: Vec<&str> = route_template.split('/').collect();
@@ -69,7 +89,7 @@ fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option
     }
 
     for (route_segment, url_segment) in route_segments.iter().zip(url_segments.iter()) {
-        if let Some(placeholder_value) = match_segment(route_segment, url_segment, placeholders) {
+        if let Some(placeholder_value) = match_segment(route_segment, url_segment, placeholders).await {
             if !placeholder_value.is_empty() {
                 matched_placeholders.push(placeholder_value);
             }
@@ -81,9 +101,9 @@ fn match_route(route_template: &str, placeholders: &[&str], url: &str) -> Option
     Some(matched_placeholders)
 }
 
-fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) -> Option<String> {
+async fn match_segment<'a>(route_segment: &'a str, url_segment: &'a str, placeholders: &Vec<RtData>) -> Option<String> {
     if route_segment.starts_with('{') && route_segment.ends_with('}') {
-        let placeholder = &route_segment[1..route_segment.len() - 1];
+        let placeholder = route_segment[1..route_segment.len() - 1].into();
         if placeholders.contains(&placeholder) {
             Some(url_segment.to_string())
         } else {
@@ -95,7 +115,7 @@ fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) 
         let route_parts: Vec<&str> = route_segment.split('.').collect();
         let url_parts: Vec<&str> = url_segment.split('.').collect();
         if route_parts.len() == url_parts.len() && route_parts.last() == url_parts.last() {
-            match_segment(route_parts[0], url_parts[0], placeholders)
+            Box::pin(match_segment(route_parts[0], url_parts[0], placeholders)).await
         } else {
             None
         }
@@ -104,6 +124,27 @@ fn match_segment(route_segment: &str, url_segment: &str, placeholders: &[&str]) 
 
 impl Route {
     pub fn default() -> Self { Default::default() }
+
+    pub async fn search_for(url: &str) -> Option<(Route, Vec<String>)> {
+        let index = ROUTES_INDEX.lock().await;
+
+        for entry in index.iter() {
+            let (_, route_container) = entry.pair();
+            let route_template = &route_container.inner.route;
+
+            let placeholders = match &route_container.inner.args {
+                Some(args) => args,
+                None => &vec![],
+            };
+
+            if let Some(matched_values) = match_route(route_template, &placeholders, url).await {
+                println!("found: {url}");
+                return Some((route_container.inner.clone(), matched_values));
+            }
+        }
+
+        get_fallback_route().await
+    }
 
     pub async fn cleanup() -> std::io::Result<()> {
         let cache_dir = PathBuf::from(global!("base.cache"));
@@ -246,32 +287,14 @@ impl Route {
     pub async fn get(key: &str) -> Result<Route, Error> {
         let key = match key {
             "/" => global!("dirs.cache", "/index"),
+            "__handler_not_found" => global!("dirs.handler", "/not_found"),
+            "__handler_wildcard" => global!("dirs.handler", "/wildcard"),
             _ => global!("dirs.cache", key),
-        };
-
-        let files = HashMap::from([
-            ("not_found", global!("dirs.handler", "/not_found")),
-            ("wildcard", global!("dirs.handler", "/wildcard")),
-            ("server_error", global!("dirs.handler", "/internal_err")),
-        ]);
-
-        let page_exists = |key| match key {
-            "not_found" => file_exists!(&files.get("not_found").unwrap()),
-            "wildcard" => file_exists!(&files.get("wildcard").unwrap()),
-            _ => false,
         };
 
         let bytes = match read(&key).await {
             Ok(contents) => contents,
-            Err(err) => {
-                if page_exists("not_found") {
-                    read(files.get("not_found").unwrap()).await?
-                } else if page_exists("wildcard") {
-                    read(files.get("wildcard").unwrap()).await?
-                } else {
-                    return Err(anyhow!(err));
-                }
-            }
+            Err(err) => return Err(anyhow!(err)),
         };
 
         Ok(ron::de::from_bytes(&bytes)?)

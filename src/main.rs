@@ -196,7 +196,7 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
     // move error handling here
     routes::parse::try_parse(&contents).await;
 
-    let route = match Route::get(&parse_slash(&url)).await {
+    let (route, args) = match Route::get(&parse_slash(&url)).await {
         Ok(route) => {
             let mut matched_url = url.to_owned();
 
@@ -219,11 +219,17 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
             }
 
             match Route::get(&matched_url).await {
-                Ok(route) => route,
-                Err(err) => error!(err),
+                Ok(matched) => (matched, vec![]),
+                Err(err) => match Route::search_for(&matched_url).await {
+                    Some(matched) => matched,
+                    None => error!(err),
+                },
             }
         }
-        Err(err) => error!(err),
+        Err(err) => match Route::search_for(&url).await {
+            Some(matched) => matched,
+            None => error!(err),
+        },
     };
 
     let mut ast = match engine.compile(route.construct_fn()) {
@@ -237,11 +243,6 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
     let fn_name = match route.fn_name.as_str() {
         "/" => "/index",
         name => name,
-    };
-
-    let args = match route.args.to_owned() {
-        Some(args) => args,
-        None => vec![],
     };
 
     match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, fn_name, args) {
@@ -259,7 +260,7 @@ async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    set_env_sync!(RUST_LOG = "debug");
+    set_env_sync!(RUST_LOG = "info");
     globals::init();
 
     let config = config::read();
