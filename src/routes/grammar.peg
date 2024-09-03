@@ -1,4 +1,4 @@
-grammar = { SOI ~ (route_definition | function_def | index | not_found | wildcard)* ~ EOI }
+grammar = { SOI ~ (route_definition | function_def | not_found | wildcard)* ~ EOI }
 
 route_definition = { 
 	 route_attr? ~ function_def
@@ -6,10 +6,6 @@ route_definition = {
 
 function_def = { 
 	 route_name ~ ("(" ~ parameters? ~ ")")? ~ block
-}
-
-index = {
-	 "index" ~ block
 }
 
 wildcard = {

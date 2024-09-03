@@ -1,7 +1,10 @@
+use futures::future::join_all;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
 #[derive(Parser)]
 #[grammar = "routes/grammar.peg"]
@@ -93,27 +96,39 @@ fn extract_route_info(pair: Pair<Rule>, input: &str) -> super::Route {
     route_info
 }
 
-fn process_pair(pair: Pair<Rule>, input: &str) {
-    match pair.as_rule() {
-        Rule::index => extract_route_info(pair, input).save(super::RtKind::Index),
-        Rule::route_definition => extract_route_info(pair, input).save(super::RtKind::Normal),
-        Rule::not_found => extract_route_info(pair, input).save(super::RtKind::NotFound),
-        Rule::wildcard => extract_route_info(pair, input).save(super::RtKind::Wildcard),
+fn process_pair<'i>(pair: Pair<'i, Rule>, input: &'i str) -> Pin<Box<dyn Future<Output = Vec<(String, super::Route)>> + 'i>> {
+    Box::pin(async move {
+        let mut index: Vec<(String, super::Route)> = Vec::new();
 
-        _ => {
-            for inner_pair in pair.into_inner() {
-                process_pair(inner_pair, input);
+        match pair.as_rule() {
+            Rule::route_definition => index.push(extract_route_info(pair, input).save(super::RtKind::Normal).await),
+            Rule::not_found => index.push(extract_route_info(pair, input).save(super::RtKind::NotFound).await),
+            Rule::wildcard => index.push(extract_route_info(pair, input).save(super::RtKind::Wildcard).await),
+            _ => {
+                for inner_pair in pair.into_inner() {
+                    let mut inner_index = process_pair(inner_pair, input).await;
+                    index.append(&mut inner_index);
+                }
             }
         }
-    }
+
+        index
+    })
 }
 
-pub fn try_parse(input: &str) {
+pub async fn try_parse(input: &str) {
     match RouteParser::parse(Rule::grammar, input) {
         Ok(pairs) => {
-            for pair in pairs {
-                process_pair(pair, input);
-            }
+            let futures: Vec<_> = pairs.into_iter().map(|pair| process_pair(pair, input)).collect();
+            let results = join_all(futures).await;
+            let index: Vec<(String, super::Route)> = results.into_iter().flatten().collect();
+
+            super::Route::update_index(index).await;
+
+            match super::Route::cleanup().await {
+                Ok(_) => tracing::trace!("Cache cleanup completed successfully"),
+                Err(err) => tracing::error!(err = err.to_string(), "Error during cache cleanup"),
+            };
         }
         Err(e) => println!("Error: {}", e),
     }

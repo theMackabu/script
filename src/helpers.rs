@@ -2,40 +2,53 @@ pub mod file;
 
 use actix_web::http::StatusCode;
 use mongodb::{bson::doc, sync::Database};
-use regex::{Captures, Regex};
 use rhai::{plugin::EvalAltResult, Engine, ParseError, AST};
+use std::collections::HashMap;
 
 pub mod prelude {
     pub use super::file::*;
 }
 
-pub fn rm_first(s: &str) -> &str {
-    let mut chars = s.chars();
-    chars.next();
-    chars.as_str()
+pub fn replace_chars(input: &str) -> String {
+    let replacements = HashMap::from([
+        ('#', "_fhas"),
+        (':', "_fcol"),
+        ('-', "_fdas"),
+        ('@', "_fats"),
+        ('!', "_fexl"),
+        ('&', "_famp"),
+        ('^', "_fcar"),
+        ('~', "_ftil"),
+    ]);
+
+    let mut result = String::with_capacity(input.len());
+
+    for c in input.chars() {
+        if let Some(replacement) = replacements.get(&c) {
+            result.push_str(replacement);
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }
 
-pub fn convert_to_format(input: &str) -> String {
-    let re = Regex::new(r"\.(\w+)").unwrap();
-    let input = super::replace_chars(input);
-    format!("_route_{}", re.replace_all(&input.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0]))))
-}
-
-pub fn route_to_fn(input: &str) -> String {
-    let input = super::replace_chars(input);
-    let re = Regex::new(r#"\{([^{}\s]+)\}"#).unwrap();
-    let re_dot = Regex::new(r"\.(\w+)").unwrap();
-
-    let result = re.replace_all(&input, |captures: &regex::Captures| {
-        let content = captures.get(1).map_or("", |m| m.as_str());
-        format!("_arg_{content}")
-    });
-
-    format!(
-        "_route_fmt_{}",
-        re_dot.replace_all(&result.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
-    )
-}
+// pub fn route_to_fn(input: &str) -> String {
+//     let input = super::replace_chars(input);
+//     let re = Regex::new(r#"\{([^{}\s]+)\}"#).unwrap();
+//     let re_dot = Regex::new(r"\.(\w+)").unwrap();
+//
+//     let result = re.replace_all(&input, |captures: &regex::Captures| {
+//         let content = captures.get(1).map_or("", |m| m.as_str());
+//         format!("_arg_{content}")
+//     });
+//
+//     format!(
+//         "_route_fmt_{}",
+//         re_dot.replace_all(&result.replace("/", "_"), |captures: &Captures| format!("__d{}", rm_first(&captures[0])))
+//     )
+// }
 
 pub fn collection_exists(d: &Database, name: &String) -> Result<bool, Box<EvalAltResult>> {
     let filter = doc! { "name": &name };

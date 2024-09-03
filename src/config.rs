@@ -18,7 +18,7 @@ pub fn read() -> Config {
             database: None,
             workers: vec!["app.routes".into()],
             settings: Settings {
-                cache: string!(".script/cache"),
+                cache: string!(".script"),
                 address: string!("127.0.0.1"),
                 port: 3500,
             },
