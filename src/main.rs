@@ -45,13 +45,21 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Cache {
+    /// Delete all cached routes
+    #[command(visible_alias = "purge")]
+    Clean,
+
     /// View all cached routes
     #[command(visible_alias = "ls")]
     List,
 
-    /// Delete all cached routes
-    #[command(visible_alias = "purge")]
-    Clean,
+    /// Rebuild the cache
+    #[command(visible_alias = "save")]
+    Build,
+
+    /// Do a dry-run cache with verbose logging
+    #[command(visible_alias = "test")]
+    Debug,
 
     /// View info about a cached route
     #[command(visible_alias = "info")]
@@ -95,7 +103,9 @@ async fn main() -> std::io::Result<()> {
     Ok(match &cli.command {
         Some(Commands::Cache { command }) => match command {
             Cache::List => cli::cache::list(config).await,
-            Cache::Clean => {}
+            Cache::Clean => cli::cache::clean(config),
+            Cache::Build => cli::cache::build(config).await,
+            Cache::Debug => {}
             Cache::View { route } => {}
             Cache::Remove { route } => {}
         },

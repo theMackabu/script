@@ -3,7 +3,7 @@ use colored::{Color, ColoredString, Colorize};
 use macros_rs::fmt::crashln;
 
 use crate::{
-    routes::{parse, Route, ROUTES_INDEX},
+    routes::{self, parse, Route},
     structs::config::Config,
 };
 
@@ -56,10 +56,16 @@ fn print_item(item: Route, internal: bool) {
     }
 }
 
-pub async fn list(config: Config) {
+pub fn clean(config: Config) {
+    match std::fs::remove_dir_all(config.settings.cache) {
+        Ok(_) => println!("{}", "cleaned route cache".green()),
+        Err(_) => crashln!("{}", "route cache does not exist, cannot remove".yellow()),
+    };
+}
+
+pub async fn build(config: Config) {
     // follow the same system later that main.rs will use for import system
     let filename = &config.workers.get(0).unwrap();
-    let mut internal_routes: Vec<Route> = Vec::new();
 
     let contents = match std::fs::read_to_string(&filename) {
         Ok(contents) => contents,
@@ -69,9 +75,19 @@ pub async fn list(config: Config) {
     // move error handling here
     parse::try_parse(&contents).await;
 
-    let index = ROUTES_INDEX.lock().await;
+    // have error message as well in red with crashln
+    // make it say rebuilt route cache when files exist
+    println!("{}", "built route cache".green());
+    println!("you can view all the cached routes with 'script cache list'");
+}
 
-    let mut sorted_items: Vec<_> = index.iter().map(|item| item.inner.to_owned()).collect();
+pub async fn list(config: Config) {
+    let mut internal_routes: Vec<Route> = Vec::new();
+    // add error handling
+    let index = routes::routes_index(config.settings.cache).await.unwrap();
+    let index = index.lock().await;
+
+    let mut sorted_items: Vec<_> = index.iter().map(|item| item.to_owned()).collect();
     sorted_items.sort_by(|a, b| a.fn_name.cmp(&b.fn_name));
 
     for item in sorted_items {
