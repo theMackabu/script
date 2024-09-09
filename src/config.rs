@@ -55,6 +55,7 @@ impl Config {
     }
 
     pub fn override_port(&mut self, port: u16) { self.settings.port = port; }
+    pub fn override_cache(&mut self, cache: String) { self.settings.cache = cache; }
     pub fn override_address(&mut self, address: String) { self.settings.address = address; }
     pub fn get_address(&self) -> (String, u16) { (self.settings.address.to_owned(), self.settings.port.to_owned()) }
 }

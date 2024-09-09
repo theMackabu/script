@@ -73,7 +73,7 @@ pub fn proxy(url: String) -> (String, ContentType, StatusCode) {
     }
 }
 
-async fn handler(req: HttpRequest, config: Data<Config>) -> impl Responder {
+async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder {
     let url = req.uri().to_string();
 
     macro_rules! send {
@@ -253,6 +253,10 @@ pub fn start(cli: crate::Cli) -> io::Result<Server> {
 
     if let Some(port) = cli.port {
         config.override_port(port)
+    }
+
+    if let Some(cache) = cli.cache {
+        config.override_cache(cache)
     }
 
     if let Some(address) = cli.address {

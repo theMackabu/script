@@ -30,6 +30,9 @@ pub struct Cli {
     #[arg(short, long)]
     /// Override config address
     pub address: Option<String>,
+    #[arg(short, long)]
+    /// Override cache directory
+    pub cache: Option<String>,
     /// Override config port
     #[arg(short, long)]
     pub port: Option<u16>,
