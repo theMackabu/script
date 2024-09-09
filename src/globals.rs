@@ -1,6 +1,7 @@
 use crate::structs::config::Config;
 use global_placeholders::init;
 use macros_rs::fs::{file_exists, folder_exists};
+use panic::setup_panic;
 use std::fs::create_dir_all;
 
 pub fn init(cli: &crate::Cli) -> Config {
@@ -36,6 +37,19 @@ pub fn init(cli: &crate::Cli) -> Config {
     init!("dirs.handler", format!("{}/handler{{}}.route", config.settings.cache));
     init!("dirs.cache.index", format!("{}/routes.toml", config.settings.cache));
     init!("dirs.cache.hash", format!("{}/hashes.toml", config.settings.cache));
+
+    setup_panic! {
+        name: "Script Web Engine",
+        short_name: "script",
+        version: env!("CARGO_PKG_VERSION"),
+        repository: "https://github.com/themackabu/script",
+        messages: {
+            colors: (Color::Red, Color::White, Color::Green),
+            head: "Well, this is embarrassing. %(name) v%(version) had a problem and crashed. \nTo help us diagnose the problem you can send us a crash report\n",
+            body: "We have generated a report file at \"%(file_path)\". \nSubmit an issue or email with the subject of \"%(name) v%(version) crash report\" and include the report as an attachment at %(repository).\n",
+            footer: "We take privacy seriously, and do not perform any automated error collection. \nIn order to improve the software, we rely on people to submit reports. Thank you!"
+        }
+    };
 
     return config;
 }
