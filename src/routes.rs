@@ -258,8 +258,8 @@ impl Route {
         routes.retain(|_, v| v.present_in_current_update);
     }
 
-    pub fn cache(&mut self, kind: RtKind) -> &Self {
-        let now = Utc::now();
+    pub fn cache(&mut self, kind: &RtKind) -> (&Self, DateTime<Utc>) {
+        let current_time = Utc::now();
         let mut md5 = Md5::new();
 
         let route_name = match kind {
@@ -287,17 +287,31 @@ impl Route {
         md5.update(&self.fn_name);
         md5.update(&self.fn_body);
 
-        self.created = now;
-        self.expires = now + Duration::hours(3);
         self.cache = Path::new(&cache_key).to_owned();
         self.hash = const_hex::encode(md5.finalize());
 
-        return self;
+        return (self, current_time);
     }
 
     // save functions that expired or dont exist
     pub async fn save(&mut self, kind: RtKind) -> RtIndex {
-        self.cache(kind);
+        let current_time = self.cache(&kind).1;
+        let current_route = self.cache.to_owned();
+
+        // add error handling
+        // make sure it wont error if cached route doesnt exist somehow
+        if let Ok(route) = Route::from_path(current_route).await {
+            if self.hash == route.hash {
+                if current_time <= route.expires {
+                    self.created = route.created;
+                    self.expires = route.expires;
+                    return (self.hash.to_owned(), take(self));
+                }
+            }
+        }
+
+        self.created = current_time;
+        self.expires = current_time + Duration::hours(3);
 
         if let Some(parent) = self.cache.parent() {
             if !parent.exists() {
@@ -330,6 +344,15 @@ impl Route {
         return (self.hash.to_owned(), take(self));
     }
 
+    pub async fn from_path(path: PathBuf) -> Result<Route, Error> {
+        let bytes = match read(&path).await {
+            Ok(contents) => contents,
+            Err(err) => return Err(anyhow!(err)),
+        };
+
+        Ok(ron::de::from_bytes(&bytes)?)
+    }
+
     pub async fn get(key: &str) -> Result<Route, Error> {
         let key = match key {
             "/" => global!("dirs.cache", "/index"),
@@ -338,12 +361,7 @@ impl Route {
             _ => global!("dirs.cache", key),
         };
 
-        let bytes = match read(&key).await {
-            Ok(contents) => contents,
-            Err(err) => return Err(anyhow!(err)),
-        };
-
-        Ok(ron::de::from_bytes(&bytes)?)
+        Ok(Route::from_path(key.into()).await?)
     }
 
     pub fn construct_fn(&self) -> String {
