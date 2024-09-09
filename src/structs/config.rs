@@ -4,6 +4,8 @@ use toml::Value;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(skip)]
+    pub config_path: PathBuf,
     pub workers: Vec<PathBuf>,
     pub settings: Settings,
     pub database: Option<Database>,

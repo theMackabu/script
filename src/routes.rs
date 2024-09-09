@@ -196,13 +196,13 @@ impl Route {
         let cache_dir = PathBuf::from(global!("base.cache"));
         let routes = ROUTES_INDEX.lock().await;
 
-        tracing::trace!("Cache directory: {:?}", cache_dir);
+        log::trace!("Cache directory: {:?}", cache_dir);
 
         let valid_cache_files: HashSet<PathBuf> = routes
             .iter()
             .map(|item| {
                 let path = item.value().inner.cache.clone();
-                tracing::trace!("Valid cache file: {:?}", path);
+                log::trace!("Valid cache file: {:?}", path);
                 path
             })
             .collect();
@@ -210,23 +210,23 @@ impl Route {
         for entry in WalkDir::new(&cache_dir).into_iter().filter_map(|e| e.ok()) {
             let path = entry.path().to_path_buf();
             if path.is_file() {
-                tracing::trace!("Checking file: {:?}", path);
+                log::trace!("Checking file: {:?}", path);
 
                 let should_keep = valid_cache_files.iter().any(|valid_path| {
                     let paths_match = path == *valid_path;
-                    tracing::trace!("Comparing {:?} with {:?}: {}", path, valid_path, paths_match);
+                    log::trace!("Comparing {:?} with {:?}: {}", path, valid_path, paths_match);
                     paths_match
                 });
 
                 if !should_keep {
-                    tracing::debug!("Deleting file: {:?}", path);
+                    log::debug!("Deleting file: {:?}", path);
                     remove_file(&path)?;
                 } else {
-                    tracing::debug!("Keeping file: {:?}", path);
+                    log::debug!("Keeping file: {:?}", path);
                 }
             } else if entry.file_type().is_dir() {
                 if read_dir(path.to_owned())?.next().is_none() {
-                    tracing::debug!("Removing empty directory: {:?}", path);
+                    log::debug!("Removing empty directory: {:?}", path);
                     remove_dir(&path)?;
                 }
             }
@@ -309,13 +309,13 @@ impl Route {
         let encoded = match ron::ser::to_string(&self) {
             Ok(contents) => contents,
             Err(err) => {
-                tracing::error!(err = string!(err), "Cannot encode route");
+                log::error!(err = string!(err), "Cannot encode route");
                 std::process::exit(1);
             }
         };
 
         if let Err(err) = write(self.cache.to_owned(), encoded).await {
-            tracing::error!(err = string!(err), "Error writing route");
+            log::error!(err = string!(err), "Error writing route");
             std::process::exit(1);
         }
 
@@ -361,5 +361,6 @@ impl Route {
 }
 
 pub mod prelude {
+    pub use super::parse;
     pub use super::Route;
 }

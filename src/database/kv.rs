@@ -1,11 +1,10 @@
-use crate::config;
-use macros_rs::{fmt::string, fs::file_exists};
+use crate::{prelude::*, structs::config::Config};
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use rhai::{plugin::*, FnNamespace};
 use std::cell::RefCell;
 
 fn load(path: String) -> Option<PickleDb> {
-    let config = config::read();
+    let config = Config::new().set_path(&crate::Cli::parse().config).read();
 
     if !file_exists!(&path) {
         PickleDb::new(&path, PickleDbDumpPolicy::AutoDump, config.kv_serialization_method()?);

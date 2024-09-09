@@ -1,4 +1,4 @@
-use crate::{config, helpers::collection_exists, structs::modules::*};
+use crate::{helpers::collection_exists, prelude::*, structs::config::Config, structs::modules::*};
 use rhai::{plugin::*, serde::to_dynamic, Array, FnNamespace};
 use std::sync::Arc;
 
@@ -45,7 +45,10 @@ pub mod mongo_db {
     }
 
     pub fn connect() -> Client {
-        let config = config::read().database.unwrap();
+        // add error handling
+        // .get_db(Database::Mongo)
+        let config = Config::new().set_path(&crate::Cli::parse().config).read().database.unwrap();
+
         match MongoClient::with_uri_str(config.mongo.unwrap().server.unwrap_or("".to_string())) {
             Ok(client) => Client { client: Some(client) },
             Err(_) => Client { client: None },

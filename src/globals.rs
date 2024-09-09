@@ -1,15 +1,14 @@
-use crate::config;
+use crate::structs::config::Config;
 use global_placeholders::init;
 use macros_rs::fs::folder_exists;
 use std::fs::create_dir_all;
 
-pub fn init() {
-    let config = config::read();
+pub fn init(config: &Config) {
     let cache_dir = format!("{}/cache", config.settings.cache);
 
     if !folder_exists!(&cache_dir) {
         create_dir_all(&cache_dir).unwrap();
-        tracing::info!("created cached dir");
+        log::info!("created cached dir");
     }
 
     init!("base.cache", config.settings.cache);

@@ -126,8 +126,8 @@ pub async fn try_parse(input: &str) {
             super::Route::update_index(index).await;
 
             match super::Route::cleanup().await {
-                Ok(_) => tracing::trace!("Cache cleanup completed successfully"),
-                Err(err) => tracing::error!(err = err.to_string(), "Error during cache cleanup"),
+                Ok(_) => log::trace!("Cache cleanup completed successfully"),
+                Err(err) => log::error!(err = err.to_string(), "Error during cache cleanup"),
             };
         }
         Err(e) => println!("Error: {}", e),

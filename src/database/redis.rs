@@ -1,4 +1,4 @@
-use crate::{config, structs::modules::*};
+use crate::{prelude::*, structs::config::Config, structs::modules::*};
 use macros_rs::fmt::string;
 use redis::{Client as RedisClient, Commands};
 use rhai::{plugin::*, serde::to_dynamic, FnNamespace};
@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 #[export_module]
 pub mod redis_db {
     pub fn connect() -> Redis {
-        let config = config::read().database.unwrap();
+        // add error handling
+        // .get_db(Database::Redis)
+        let config = Config::new().set_path(&crate::Cli::parse().config).read().database.unwrap();
         match RedisClient::open(config.redis.unwrap().server) {
             Ok(client) => Redis { client: Some(client) },
             Err(_) => Redis { client: None },
