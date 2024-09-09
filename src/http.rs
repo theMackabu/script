@@ -1,5 +1,5 @@
 use crate::{
-    globals, helpers,
+    helpers,
     helpers::prelude::*,
     modules::prelude::*,
     routes::prelude::*,
@@ -248,24 +248,9 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder 
     };
 }
 
-pub fn start(cli: crate::Cli) -> io::Result<Server> {
-    let mut config = Config::new().set_path(&cli.config).read();
-
-    if let Some(port) = cli.port {
-        config.override_port(port)
-    }
-
-    if let Some(cache) = cli.cache {
-        config.override_cache(cache)
-    }
-
-    if let Some(address) = cli.address {
-        config.override_address(address)
-    }
-
-    globals::init(&config);
-
+pub fn start(config: Config) -> io::Result<Server> {
     let owned = Arc::new(config.to_owned());
+
     let app = move || {
         let config = Arc::clone(&owned);
         App::new().app_data(Data::new(config)).default_service(web::to(handler))

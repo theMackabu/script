@@ -50,4 +50,3 @@ Install from crates.io using `cargo install script`
 - Open a terminal in the project folder
 - Check if you have cargo (Rust's package manager) installed, just type in `cargo`
 - If cargo is installed, run `cargo build --release`
-- Put the executable into one of your PATH entries, usually `/bin/` or `/usr/bin/`
