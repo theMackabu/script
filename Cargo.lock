@@ -2487,6 +2487,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rhai-dynamic"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd22808adf12fcb12925f7ee8d3bf8a91717b0c62c27ebbc8065fcc5d3454124"
+dependencies = [
+ "quote",
+ "smartstring",
+ "syn 2.0.77",
+]
+
+[[package]]
 name = "rhai-fs"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2695,6 +2706,7 @@ dependencies = [
  "redis",
  "reqwest",
  "rhai",
+ "rhai-dynamic",
  "rhai-fs",
  "rhai-url",
  "ron",

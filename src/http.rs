@@ -8,7 +8,7 @@ use crate::{
 
 use mime::Mime;
 use reqwest::blocking::Client as ReqwestClient;
-use smartstring::alias::String as SmString;
+use rhai_dynamic::ToDynamic;
 use std::{collections::HashMap, io, sync::Arc};
 
 use rhai::{exported_module as export, plugin::*, Dynamic, Engine, Map, Scope};
@@ -113,7 +113,7 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, ToDynamic)]
     struct Request {
         path: String,
         url: String,
@@ -121,33 +121,9 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
         query: String,
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, ToDynamic)]
     struct Internal {
         version: String,
-    }
-
-    // convert to macro
-    impl Internal {
-        fn to_dynamic(&self) -> Dynamic {
-            let mut map = Map::new();
-
-            map.insert(SmString::from("version"), Dynamic::from(self.version.clone()));
-
-            Dynamic::from(map)
-        }
-    }
-
-    impl Request {
-        fn to_dynamic(&self) -> Dynamic {
-            let mut map = Map::new();
-
-            map.insert(SmString::from("path"), Dynamic::from(self.path.clone()));
-            map.insert(SmString::from("url"), Dynamic::from(self.url.clone()));
-            map.insert(SmString::from("version"), Dynamic::from(self.version.clone()));
-            map.insert(SmString::from("query"), Dynamic::from(self.query.clone()));
-
-            Dynamic::from(map)
-        }
     }
 
     let request = Request {
