@@ -1,3 +1,4 @@
+pub mod colors;
 pub mod file;
 
 use actix_web::http::StatusCode;
@@ -5,6 +6,7 @@ use mongodb::{bson::doc, sync::Database};
 use rhai::{plugin::EvalAltResult, Engine, ParseError, AST};
 
 pub mod prelude {
+    pub use super::colors::*;
     pub use super::file::*;
 }
 

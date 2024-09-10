@@ -248,7 +248,8 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder 
     };
 }
 
-pub fn start(config: Config) -> io::Result<Server> {
+#[tokio::main]
+pub async fn start(config: Config) -> io::Result<()> {
     let owned = Arc::new(config.to_owned());
 
     let app = move || {
@@ -257,5 +258,5 @@ pub fn start(config: Config) -> io::Result<Server> {
     };
 
     log::info!(address = config.settings.address, port = config.settings.port, "server started");
-    Ok(HttpServer::new(app).bind(config.get_address())?.run())
+    Ok(HttpServer::new(app).bind(config.get_address())?.run().await?)
 }

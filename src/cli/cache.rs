@@ -1,8 +1,10 @@
 use chrono::{DateTime, Duration, Utc};
 use colored::{Color, ColoredString, Colorize};
 use macros_rs::fmt::crashln;
+use std::{fs, io, path::Path};
 
 use crate::{
+    helpers::prelude::*,
     routes::{self, parse, Route},
     structs::config::Config,
 };
@@ -41,35 +43,58 @@ fn format_time(dt: DateTime<Utc>) -> ColoredString {
 }
 
 fn print_item(item: Route, internal: bool) {
-    let star = "*".bold();
-    let dash = "-".bold();
-
     let expiry = format_time(item.expires);
     let fn_name = item.fn_name.bright_cyan().bold();
     let route = item.route.replace("index", "").cyan();
     let file_path = format!("({})", item.cache.to_string_lossy()).white();
 
     if internal {
-        println!("{star} {fn_name} {dash} {expiry} {file_path}");
+        println!("{STAR} {fn_name} {DASH} {expiry} {file_path}");
     } else {
-        println!("{star} {fn_name} {route} {dash} {expiry} {file_path}");
+        println!("{STAR} {fn_name} {route} {DASH} {expiry} {file_path}");
     }
 }
 
-pub fn clean(config: Config) {
-    match std::fs::remove_dir_all(config.settings.cache) {
-        Ok(_) => println!("{}", "cleaned route cache".green()),
-        Err(_) => crashln!("{}", "route cache does not exist, cannot remove".yellow()),
-    };
+// rewrite
+fn is_dir_empty<P: AsRef<Path>>(path: P) -> io::Result<bool> {
+    let mut entries = fs::read_dir(&path)?;
+
+    while let Some(entry) = entries.next() {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            if !is_dir_empty(&path)? {
+                return Ok(false);
+            }
+        } else {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
-pub async fn build(config: Config) {
+pub fn clean(config: Config) {
+    // add error handling
+    if is_dir_empty(&config.settings.cache).unwrap() {
+        crashln!("{WARN} {}", "Route cache does not exist, cannot remove.")
+    } else {
+        match std::fs::remove_dir_all(config.settings.cache) {
+            Ok(_) => println!("{SUCCESS} {}", "Cleaned route cache."),
+            Err(err) => crashln!("{FAIL} Failed to remove cache, {err}"),
+        };
+    }
+}
+
+#[tokio_wrap::sync]
+pub fn build(config: Config) {
     // follow the same system later that main.rs will use for import system
     let filename = &config.workers.get(0).unwrap();
 
     let contents = match std::fs::read_to_string(&filename) {
         Ok(contents) => contents,
-        Err(err) => crashln!("Error reading script file: {}\n{}", filename.to_string_lossy(), err),
+        Err(err) => crashln!("{FAIL} Error reading {}, {err}", filename.to_string_lossy()),
     };
 
     // move error handling here
@@ -77,11 +102,13 @@ pub async fn build(config: Config) {
 
     // have error message as well in red with crashln
     // make it say rebuilt route cache when files exist
-    println!("{}", "built route cache".green());
-    println!("you can view all the cached routes with 'script cache list'");
+    // migrate to global colors in globals::SUCCESS, globals::FAIL etc
+    println!("{SUCCESS} {}", "Built route cache.");
+    println!("{} You can view all the cached routes with 'script cache list'", "[💡]".bright_yellow());
 }
 
-pub async fn list(config: Config) {
+#[tokio_wrap::sync]
+pub fn list(config: Config) {
     let mut internal_routes: Vec<Route> = Vec::new();
     // add error handling
     let index = routes::routes_index(config.settings.cache).await.unwrap();

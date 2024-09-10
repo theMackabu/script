@@ -1791,7 +1791,7 @@ version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09f2b49fc0d5da6888e52c189733579fde0ee1c205a23f41d49700fb55894f94"
 dependencies = [
- "termcolor",
+ "actix-web",
 ]
 
 [[package]]
@@ -2695,6 +2695,7 @@ dependencies = [
  "serde_json",
  "smartstring",
  "tokio",
+ "tokio-wrap",
  "toml",
  "tracing",
  "tracing-bunyan-formatter",
@@ -3092,15 +3093,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "termcolor"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "text_placeholder"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3264,6 +3256,16 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "tokio-wrap"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2008b9603e0181aed0deb456dda3c35ef415dad1484eb26f37de1764281b8108"
+dependencies = [
+ "quote",
+ "syn 2.0.77",
 ]
 
 [[package]]

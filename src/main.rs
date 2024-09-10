@@ -85,8 +85,7 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
+fn main() {
     let cli = Cli::parse();
     let config = globals::init(&cli);
 
@@ -100,17 +99,17 @@ async fn main() -> std::io::Result<()> {
         .with(formatting_layer_config)
         .init();
 
-    Ok(match &cli.command {
+    match &cli.command {
         Some(Commands::Cache { command }) => match command {
-            Cache::List => cli::cache::list(config).await,
+            Cache::List => cli::cache::list(config),
             Cache::Clean => cli::cache::clean(config),
-            Cache::Build => cli::cache::build(config).await,
+            Cache::Build => cli::cache::build(config),
             Cache::Debug => {}
             Cache::View { route } => {}
             Cache::Remove { route } => {}
         },
-        None => http::start(config)?.await.unwrap_or_else(|err| {
+        None => http::start(config).unwrap_or_else(|err| {
             crashln!("Failed to start server!\n{:?}", err);
         }),
-    })
+    }
 }
