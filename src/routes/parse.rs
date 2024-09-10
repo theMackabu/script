@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use pest::iterators::Pair;
-use pest::Parser;
+use pest::{error::Error, Parser};
 use pest_derive::Parser;
 use std::collections::HashMap;
 use std::future::Future;
@@ -116,20 +116,18 @@ fn process_pair<'i>(pair: Pair<'i, Rule>, input: &'i str) -> Pin<Box<dyn Future<
     })
 }
 
-pub async fn try_parse(input: &str) {
-    match RouteParser::parse(Rule::grammar, input) {
-        Ok(pairs) => {
-            let futures: Vec<_> = pairs.into_iter().map(|pair| process_pair(pair, input)).collect();
-            let results = join_all(futures).await;
-            let index: Vec<(String, super::Route)> = results.into_iter().flatten().collect();
+pub async fn try_parse(input: &str) -> Result<(), Error<Rule>> {
+    let pairs = RouteParser::parse(Rule::grammar, input)?;
+    let futures: Vec<_> = pairs.into_iter().map(|pair| process_pair(pair, input)).collect();
+    let results = join_all(futures).await;
+    let index: Vec<(String, super::Route)> = results.into_iter().flatten().collect();
 
-            super::Route::update_index(index).await;
+    super::Route::update_index(index).await;
 
-            match super::Route::cleanup().await {
-                Ok(_) => log::trace!("Cache cleanup completed successfully"),
-                Err(err) => log::error!(err = err.to_string(), "Error during cache cleanup"),
-            };
-        }
-        Err(e) => println!("Error: {}", e),
-    }
+    match super::Route::cleanup().await {
+        Ok(_) => log::trace!("Cache cleanup completed successfully"),
+        Err(err) => log::error!(err = err.to_string(), "Error during cache cleanup"),
+    };
+
+    Ok(())
 }

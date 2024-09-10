@@ -14,6 +14,7 @@ chrono = "0.4.38"
 
 [dependencies]
 ron = "0.8.1"
+pat = "1.0.1"
 mime = "0.3.17"
 toml = "0.8.19"
 pest = "2.7.11"

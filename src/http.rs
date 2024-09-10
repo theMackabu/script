@@ -146,9 +146,11 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
         .register_fn("json", status::json)
         .register_fn("html", status::html);
 
-    // add more error handling
     let contents = get_workers(&config.workers).await?;
-    parse::try_parse(&contents).await;
+
+    if let Err(err) = parse::try_parse(&contents).await {
+        error!(req->err@url);
+    };
 
     let (route, args) = match Route::get(&parse_slash(&url)).await {
         Ok(route) => {

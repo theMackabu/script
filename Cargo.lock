@@ -2105,6 +2105,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pat"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b253cdae1f0d013c50bb4e00f79c1a751df2a28860cb0750f6d414de34c7215d"
+
+[[package]]
 name = "pbkdf2"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2682,6 +2688,7 @@ dependencies = [
  "mime",
  "mongodb",
  "panic",
+ "pat",
  "pest",
  "pest_derive",
  "pickledb",

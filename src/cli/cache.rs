@@ -94,8 +94,9 @@ pub fn build(config: Config) {
         Err(err) => crashln!("{FAIL} Failed to read contents, {err}"),
     };
 
-    // move error handling here
-    parse::try_parse(&contents).await;
+    if let Err(err) = parse::try_parse(&contents).await {
+        crashln!("{FAIL} Failed to parse contents, {err}")
+    };
 
     // have error message as well in red with crashln
     // make it say rebuilt route cache when files exist
