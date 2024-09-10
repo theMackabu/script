@@ -17,12 +17,10 @@ use tokio::{
 };
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{create_dir_all, read_dir, remove_dir, remove_file},
-    future::Future,
     mem::take,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::Arc,
 };
 
@@ -31,7 +29,6 @@ pub type RtIndex = (String, Route);
 pub type RtData = SmartString<LazyCompact>;
 pub type RtArgs = Option<Vec<RtData>>;
 pub type RtConfig = Option<HashMap<String, String>>;
-pub type RtLocalIndex = Arc<Mutex<Vec<Route>>>;
 pub type RtSearchIndex = Option<(Route, Vec<String>)>;
 pub type RtGlobalIndex = Arc<Mutex<DashMap<String, RouteContainer>>>;
 
@@ -65,32 +62,25 @@ lazy_lock! {
     pub static ROUTES_INDEX: RtGlobalIndex = Arc::new(Mutex::new(DashMap::new()));
 }
 
-pub async fn routes_index(root_dir: String) -> Result<RtLocalIndex, anyhow::Error> {
-    let index = Arc::new(Mutex::new(Vec::new()));
-    visit_dirs(Path::new(&root_dir), &index).await?;
-    Ok(index)
-}
+pub async fn routes_index(root_dir: String) -> Result<Vec<Route>, Error> {
+    let mut index = Vec::new();
+    let mut dirs_to_visit = VecDeque::new();
+    dirs_to_visit.push_back(PathBuf::from(root_dir));
 
-// cleanup code
-fn visit_dirs<'i>(dir: &'i Path, index: &'i RtLocalIndex) -> Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + 'i>> {
-    Box::pin(async move {
-        if dir.is_dir() {
-            for entry in std::fs::read_dir(dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    visit_dirs(&path, index).await?;
-                } else if let Some(extension) = path.extension() {
-                    if extension == "route" {
-                        let route_container = Route::from_path(path.to_path_buf()).await?;
-                        index.lock().await.push(route_container);
-                    }
-                }
+    while let Some(dir) = dirs_to_visit.pop_front() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                dirs_to_visit.push_back(path);
+            } else if path.extension().map_or(false, |ext| ext == "route") {
+                let route_container = Route::from_path(path).await?;
+                index.push(route_container);
             }
         }
+    }
 
-        Ok(())
-    })
+    Ok(index)
 }
 
 async fn get_fallback_route() -> Option<(Route, Vec<String>)> {

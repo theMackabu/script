@@ -1,6 +1,6 @@
 use colored::Colorize;
 use macros_rs::fmt::{crashln, string};
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, io::Result, path::PathBuf};
 
 pub fn cwd() -> PathBuf {
     match env::current_dir() {
@@ -23,4 +23,20 @@ pub fn read_toml<T: serde::de::DeserializeOwned>(path: PathBuf) -> T {
         Ok(parsed) => parsed,
         Err(err) => crashln!("Cannot parse {path_fmt}.\n{}", err.white()),
     }
+}
+
+pub async fn get_workers(workers: &[PathBuf]) -> Result<String> {
+    let mut combined_contents = String::new();
+
+    for worker in workers {
+        match tokio::fs::read_to_string(worker).await {
+            Ok(contents) => {
+                combined_contents.push_str(&contents);
+                combined_contents.push('\n');
+            }
+            Err(err) => log::error!("error reading file {}: {}", worker.display(), err),
+        }
+    }
+
+    Ok(combined_contents)
 }

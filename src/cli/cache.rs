@@ -89,12 +89,9 @@ pub fn clean(config: Config) {
 
 #[tokio_wrap::sync]
 pub fn build(config: Config) {
-    // follow the same system later that main.rs will use for import system
-    let filename = &config.workers.get(0).unwrap();
-
-    let contents = match std::fs::read_to_string(&filename) {
-        Ok(contents) => contents,
-        Err(err) => crashln!("{FAIL} Error reading {}, {err}", filename.to_string_lossy()),
+    let contents = match get_workers(&config.workers).await {
+        Ok(content) => content,
+        Err(err) => crashln!("{FAIL} Failed to read contents, {err}"),
     };
 
     // move error handling here
@@ -110,14 +107,13 @@ pub fn build(config: Config) {
 #[tokio_wrap::sync]
 pub fn list(config: Config) {
     let mut internal_routes: Vec<Route> = Vec::new();
-    // add error handling
-    let index = routes::routes_index(config.settings.cache).await.unwrap();
-    let index = index.lock().await;
 
-    let mut sorted_items: Vec<_> = index.iter().map(|item| item.to_owned()).collect();
-    sorted_items.sort_by(|a, b| a.fn_name.cmp(&b.fn_name));
+    let index = match routes::routes_index(config.settings.cache).await {
+        Ok(index) => index.tap(|i| i.sort_by(|a, b| a.fn_name.cmp(&b.fn_name))),
+        Err(err) => crashln!("{FAIL} Failed to read cache, {err}"),
+    };
 
-    for item in sorted_items {
+    for item in index {
         match item.fn_name.as_str() {
             "not_found" | "wildcard" => internal_routes.push(item),
             _ => print_item(item, false),

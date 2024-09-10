@@ -9,16 +9,13 @@ use crate::{
 use mime::Mime;
 use reqwest::blocking::Client as ReqwestClient;
 use smartstring::alias::String as SmString;
-use std::{collections::HashMap, fs, io, sync::Arc};
+use std::{collections::HashMap, io, sync::Arc};
 
 use rhai::{packages::Package, plugin::*, Dynamic, Engine, Map, Scope};
 use rhai_fs::FilesystemPackage;
 use rhai_url::UrlPackage;
 
-use macros_rs::fmt::{crashln, string};
-
 use actix_web::{
-    dev::Server,
     http::{header::ContentType, StatusCode},
     web::{self, Data},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
@@ -73,38 +70,9 @@ pub fn proxy(url: String) -> (String, ContentType, StatusCode) {
     }
 }
 
-async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder {
+async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Responder, actix_web::Error> {
     let url = req.uri().to_string();
 
-    macro_rules! send {
-        ($response:expr) => {{
-            let (body, content_type, status_code) = $response;
-            log::info!(
-                method = string!(req.method()),
-                status = string!(status_code),
-                content = string!(content_type),
-                "request '{}'",
-                req.uri()
-            );
-            return HttpResponse::build(status_code).content_type(content_type).body(body);
-        }};
-    }
-
-    macro_rules! error {
-        ($err:expr) => {{
-            let body = Message {
-                error: "Function Not Found",
-                code: StatusCode::NOT_FOUND.as_u16(),
-                message: format!("Have you created the <code>{url}</code> route?"),
-                note: "You can add <code>* {}</code> or <code>404 {}</code> routes as well",
-            };
-
-            log::error!(err = string!($err), "Error finding route");
-            send!((body.render().unwrap(), ContentType::html(), StatusCode::NOT_FOUND))
-        }};
-    }
-
-    let filename = &config.workers.get(0).unwrap();
     let fs_pkg = FilesystemPackage::new();
     let url_pkg = UrlPackage::new();
 
@@ -178,12 +146,8 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder 
         .register_fn("json", status::json)
         .register_fn("html", status::html);
 
-    let contents = match fs::read_to_string(&filename) {
-        Ok(contents) => contents,
-        Err(err) => crashln!("Error reading script file: {}\n{}", filename.to_string_lossy(), err),
-    };
-
-    // move error handling here
+    // add more error handling
+    let contents = get_workers(&config.workers).await?;
     parse::try_parse(&contents).await;
 
     let (route, args) = match Route::get(&parse_slash(&url)).await {
@@ -212,13 +176,13 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder 
                 Ok(matched) => (matched, vec![]),
                 Err(err) => match Route::search_for(matched_url).await {
                     Some(matched) => matched,
-                    None => error!(err),
+                    None => error!(req->err@url),
                 },
             }
         }
         Err(err) => match Route::search_for(url.to_owned()).await {
             Some(matched) => matched,
-            None => error!(err),
+            None => error!(req->err@url),
         },
     };
 
@@ -228,7 +192,7 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder 
         Err(err) => helpers::error(&engine, &url, err),
     };
 
-    ast.set_source(filename.to_string_lossy().to_string());
+    ast.set_source("runtime::workers");
 
     let fn_name = match route.fn_name.as_str() {
         "/" => "/index",
@@ -236,14 +200,14 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> impl Responder 
     };
 
     match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, fn_name, args) {
-        Ok(response) => send!(response),
+        Ok(response) => send!(req->response),
         Err(err) => {
             let body = ServerError {
                 error: err.to_string().replace("\n", "<br>"),
                 context: vec![],
             };
 
-            return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(body.render().unwrap());
+            return Ok(HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR).content_type(ContentType::html()).body(body.render().unwrap()));
         }
     };
 }
