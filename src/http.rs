@@ -11,12 +11,10 @@ use reqwest::blocking::Client as ReqwestClient;
 use smartstring::alias::String as SmString;
 use std::{collections::HashMap, io, sync::Arc};
 
-use rhai::{packages::Package, plugin::*, Dynamic, Engine, Map, Scope};
-use rhai_fs::FilesystemPackage;
-use rhai_url::UrlPackage;
+use rhai::{exported_module as export, plugin::*, Dynamic, Engine, Map, Scope};
 
 use actix_web::{
-    http::{header::ContentType, StatusCode},
+    http::{header::ContentType, StatusCode, Uri},
     web::{self, Data},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
@@ -70,38 +68,48 @@ pub fn proxy(url: String) -> (String, ContentType, StatusCode) {
     }
 }
 
+struct Handler<'h> {
+    url: &'h Uri,
+    path: &'h str,
+    engine: &'h mut Engine,
+    scope: &'h mut Scope<'h>,
+}
+
+impl<'h> Handler<'h> {
+    fn url(&self) -> String { self.url.to_string() }
+}
+
 async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Responder, actix_web::Error> {
-    let url = req.uri().to_string();
+    let mut modules = Modules::new();
 
-    let fs_pkg = FilesystemPackage::new();
-    let url_pkg = UrlPackage::new();
+    let app = Handler {
+        url: req.uri(),
+        path: req.path(),
+        engine: &mut Engine::new(),
+        scope: &mut Scope::new(),
+    };
 
-    let json = exported_module!(json);
-    let http = exported_module!(http);
-    let exists = exported_module!(exists);
+    modules.builtin(app.engine);
+    modules.register("json", export!(json));
+    modules.register("http", export!(http));
+    modules.register("exists", export!(exists));
 
-    let mut engine = Engine::new();
-    let mut scope = Scope::new();
-
-    fs_pkg.register_into_engine(&mut engine);
-    url_pkg.register_into_engine(&mut engine);
-
-    engine.register_static_module("json", json.into());
-    engine.register_static_module("http", http.into());
-    engine.register_static_module("exists", exists.into());
+    modules.get_ext().for_each(|ext| {
+        app.engine.register_static_module(ext.0, ext.1);
+    });
 
     if let Some(database) = &config.database {
         if let Some(_) = &database.kv {
             let kv = exported_module!(kv_db);
-            engine.register_static_module("kv", kv.into());
+            app.engine.register_static_module("kv", kv.into());
         }
         if let Some(_) = &database.mongo {
             let mongo = exported_module!(mongo_db);
-            engine.register_static_module("mongo", mongo.into());
+            app.engine.register_static_module("mongo", mongo.into());
         }
         if let Some(_) = &database.redis {
             let redis = exported_module!(redis_db);
-            engine.register_static_module("redis", redis.into());
+            app.engine.register_static_module("redis", redis.into());
         }
     }
 
@@ -111,6 +119,22 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
         url: String,
         version: String,
         query: String,
+    }
+
+    #[derive(Clone)]
+    struct Internal {
+        version: String,
+    }
+
+    // convert to macro
+    impl Internal {
+        fn to_dynamic(&self) -> Dynamic {
+            let mut map = Map::new();
+
+            map.insert(SmString::from("version"), Dynamic::from(self.version.clone()));
+
+            Dynamic::from(map)
+        }
     }
 
     impl Request {
@@ -127,15 +151,20 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
     }
 
     let request = Request {
-        path: url.to_string(),
-        url: req.uri().to_string(),
+        url: app.url.to_string(),
+        path: app.path.to_owned(),
         version: format!("{:?}", req.version()),
         query: req.query_string().to_string(),
     };
 
-    scope.push("request", request.to_dynamic());
+    let internal = Internal {
+        version: format!("{:?}", req.version()),
+    };
 
-    engine
+    app.scope.push("app", internal.to_dynamic());
+    app.scope.push("request", request.to_dynamic());
+
+    app.engine
         .register_fn("cwd", cwd)
         .register_fn("proxy", proxy)
         .register_fn("response", response)
@@ -149,12 +178,12 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
     let contents = get_workers(&config.workers).await?;
 
     if let Err(err) = parse::try_parse(&contents).await {
-        error!(req->err@url);
+        error!(req->err@app.url);
     };
 
-    let (route, args) = match Route::get(&parse_slash(&url)).await {
+    let (route, args) = match Route::get(parse_slash(&app.url())).await {
         Ok(route) => {
-            let mut matched_url = url.to_owned();
+            let mut matched_url = app.url();
 
             let cfg = match route.cfg {
                 Some(cfg) => cfg,
@@ -165,8 +194,8 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
                 // convert to enum Cfg::Wildcard, etc
                 match item.as_str() {
                     "wildcard" => {
-                        if parse_slash(&url) == route.route && parse_bool(&val) {
-                            matched_url = parse_slash(&url);
+                        if parse_slash(&app.url()) == route.route && parse_bool(&val) {
+                            matched_url = parse_slash(&app.url());
                             break;
                         }
                     }
@@ -174,24 +203,24 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
                 }
             }
 
-            match Route::get(&matched_url).await {
+            match Route::get(matched_url.to_owned()).await {
                 Ok(matched) => (matched, vec![]),
                 Err(err) => match Route::search_for(matched_url).await {
                     Some(matched) => matched,
-                    None => error!(req->err@url),
+                    None => error!(req->err@app.url),
                 },
             }
         }
-        Err(err) => match Route::search_for(url.to_owned()).await {
+        Err(err) => match Route::search_for(app.url()).await {
             Some(matched) => matched,
-            None => error!(req->err@url),
+            None => error!(req->err@app.url),
         },
     };
 
-    let mut ast = match engine.compile(route.construct_fn()) {
+    let mut ast = match app.engine.compile(route.construct_fn()) {
         Ok(ast) => ast,
         // fix fn name error
-        Err(err) => helpers::error(&engine, &url, err),
+        Err(err) => helpers::error(&app.engine, &app.url(), err),
     };
 
     ast.set_source("runtime::workers");
@@ -201,7 +230,7 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
         name => name,
     };
 
-    match engine.call_fn::<(String, ContentType, StatusCode)>(&mut scope, &ast, fn_name, args) {
+    match app.engine.call_fn::<(String, ContentType, StatusCode)>(app.scope, &ast, fn_name, args) {
         Ok(response) => send!(req->response),
         Err(err) => {
             let body = ServerError {

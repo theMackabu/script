@@ -84,7 +84,7 @@ pub async fn routes_index(root_dir: String) -> Result<Vec<Route>, Error> {
 }
 
 async fn get_fallback_route() -> Option<(Route, Vec<String>)> {
-    let fallback_routes = [("not_found", "__handler_not_found"), ("wildcard", "__handler_wildcard")];
+    let fallback_routes: [(&str, String); 2] = [("not_found", "__handler_not_found".to_string()), ("wildcard", "__handler_wildcard".to_string())];
 
     let page_exists = |key| match key {
         "not_found" => file_exists!(&global!("dirs.handler", "/not_found")),
@@ -374,12 +374,12 @@ impl Route {
         Ok(ron::de::from_bytes(&bytes)?)
     }
 
-    pub async fn get(key: &str) -> Result<Route, Error> {
-        let key = match key {
+    pub async fn get(key: String) -> Result<Route, Error> {
+        let key = match key.as_str() {
             "/" => global!("dirs.cache", "/index"),
             "__handler_not_found" => global!("dirs.handler", "/not_found"),
             "__handler_wildcard" => global!("dirs.handler", "/wildcard"),
-            _ => global!("dirs.cache", key),
+            _ => global!("dirs.cache", key.as_str()),
         };
 
         Ok(Route::from_path(key.into()).await?)
