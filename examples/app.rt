@@ -1,0 +1,101 @@
+index {
+   text(":3\nwelcome to the root")
+}
+
+hello {
+   response("Hello World!", "text", 200)
+}
+
+#[route("/example")]
+example() {
+   html(http::get("https://example.org").body)
+}
+
+#[route("/long"), cfg(wildcard = true)]
+wild_test() {
+   text("I am a wildcard route")
+}
+
+#[route("/db")]
+db() {
+   let db = kv::load("test.db");
+   
+   db.set("some.key", json::dump(#{name: "John", id: 50}));
+   let data = json::parse(db.get("some.key"));
+   
+   json(data)
+}
+
+#[route("/redis")]
+redis() {
+   let db = redis::connect();
+   
+   db.set("some.key", json::dump(#{name: "John Doe", id: 50}));
+   let data = json::parse(db.get("some.key"));
+ 
+   json(data)
+}
+
+#[route("/mongo/list")]
+mongo() {
+   let conn = mongo::connect();
+      
+   json(conn.list())
+}
+
+#[route("/mongo/{name}")]
+mongo(name) {
+   let conn = mongo::connect();
+   let db = conn.db(name);
+   
+   json(db.list())
+}
+
+#[route("/mongo/{name}/{collection}")]
+mongo(name, collection) {
+   let conn = mongo::connect().db(name).get(collection);
+   let list = conn.find().collect();
+      
+   json(#{count: list.count(), items: list})
+}
+
+#[route("/mongo/test")]
+test() {
+   let conn = mongo::connect().db("app").create("users");
+   
+   conn.insert([
+      #{firstname: "John", lastname: "Doe", id: 50},
+      #{firstname: "John", lastname: "Doe", id: 51},
+   ]);
+   
+   let list = conn.find(#{firstname: "John"}).collect();
+   conn.delete_many(#{firstname: "John"});
+   
+   json(list)
+}
+
+#[route("/example/{id}.txt")]
+example(id) {
+   text("base: " + id)
+}
+
+#[route("/program@{version}")]
+get_ver(version) {
+   text(`you are viewing program at v${version}`)
+}
+
+#[route("/example/{id}/test")]
+example_test(id) {
+   text("sub: " + id)
+}
+
+#[route("/name/{id}/{name}")]
+name(id, name) {
+   json(#{name: name, id: id})
+}
+
+#[route("/proxy/{arg}")]
+fetch_proxy(arg) {
+   proxy(`https://www.google.com/search?q=${arg}`)
+}
+
