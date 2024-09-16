@@ -33,8 +33,8 @@ pub fn init(cli: &crate::Cli) -> Config {
     init!("base.cache", config.settings.cache);
     init!("base.handler", format!("{}/handler", config.settings.cache));
 
-    init!("dirs.cache", format!("{}/cache{{}}.route", config.settings.cache));
-    init!("dirs.handler", format!("{}/handler{{}}.route", config.settings.cache));
+    init!("dirs.cache", format!("{}/cache{{}}.r", config.settings.cache));
+    init!("dirs.handler", format!("{}/handler{{}}.r", config.settings.cache));
     init!("dirs.cache.index", format!("{}/routes.toml", config.settings.cache));
     init!("dirs.cache.hash", format!("{}/hashes.toml", config.settings.cache));
 

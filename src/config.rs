@@ -11,7 +11,7 @@ impl Config {
             config_path: "config.toml".into(),
             env: None,
             database: None,
-            workers: vec!["app.routes".into()],
+            workers: vec!["app.rt".into()],
             settings: Settings {
                 cache: string!(".script"),
                 address: string!("127.0.0.1"),

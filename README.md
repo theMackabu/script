@@ -29,7 +29,7 @@ example(id) {
 }
 ```
 
-For more syntax, check out `app.routes`
+For more syntax, check out `tests/app.rt`
 
 ```bash
 # Start the server
