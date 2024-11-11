@@ -1,13 +1,17 @@
+pub mod compress;
 pub mod file;
 pub mod http;
 pub mod parse;
 pub mod response;
+pub mod shell;
 
 pub mod prelude {
+    pub use super::compress::*;
     pub use super::file::*;
     pub use super::http::*;
     pub use super::parse::*;
     pub use super::response::*;
+    pub use super::shell::*;
     pub use super::Modules;
     pub use crate::database::*;
 }

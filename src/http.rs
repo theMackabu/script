@@ -62,9 +62,17 @@ pub fn proxy(url: String) -> (String, ContentType, StatusCode) {
     let content_type = response.headers().get("Content-Type").unwrap().to_str().unwrap_or("text/plain").parse::<Mime>().unwrap();
 
     if status.is_success() {
-        (response.text().unwrap(), ContentType(content_type), status)
+        (
+            response.text().unwrap(),
+            ContentType(content_type),
+            StatusCode::from_u16(status.as_u16()).expect("Expected valid status code"),
+        )
     } else {
-        (response.text().unwrap(), ContentType(content_type), status)
+        (
+            response.text().unwrap(),
+            ContentType(content_type),
+            StatusCode::from_u16(status.as_u16()).expect("Expected valid status code"),
+        )
     }
 }
 
@@ -90,6 +98,9 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
     };
 
     modules.builtin(app.engine);
+
+    modules.register("cmd", export!(cmd));
+    modules.register("tar", export!(tar));
     modules.register("json", export!(json));
     modules.register("http", export!(http));
     modules.register("exists", export!(exists));
@@ -123,7 +134,7 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
 
     #[derive(Clone, ToDynamic)]
     struct Internal {
-        version: String,
+        version: &'static str,
     }
 
     let request = Request {
@@ -133,9 +144,7 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
         query: req.query_string().to_string(),
     };
 
-    let internal = Internal {
-        version: format!("{:?}", req.version()),
-    };
+    let internal = Internal { version: env!("CARGO_PKG_VERSION") };
 
     app.scope.push("app", internal.to_dynamic());
     app.scope.push("request", request.to_dynamic());
@@ -149,7 +158,11 @@ async fn handler(req: HttpRequest, config: Data<Arc<Config>>) -> Result<impl Res
         .register_fn("html", default::html)
         .register_fn("text", status::text)
         .register_fn("json", status::json)
-        .register_fn("html", status::html);
+        .register_fn("html", status::html)
+        .register_fn("pad", array::pad)
+        .register_fn("join", array::join)
+        .register_fn("join", array::join_separator)
+        .register_fn("repeat", string::repeat);
 
     let contents = get_workers(&config.workers).await?;
 

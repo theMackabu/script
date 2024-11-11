@@ -44,13 +44,13 @@ pub mod http {
                 length: response.content_length(),
                 status: response.status().as_u16(),
                 err: None,
-                body: Some(response.text().unwrap()),
+                body: Some(response.text().unwrap_or_default()),
             }
         } else {
             Http {
                 length: response.content_length(),
                 status: response.status().as_u16(),
-                err: Some(response.text().unwrap()),
+                err: Some(response.text().unwrap_or_default()),
                 body: None,
             }
         }
@@ -81,13 +81,13 @@ pub mod http {
                 length: response.content_length(),
                 status: response.status().as_u16(),
                 err: None,
-                body: Some(response.text().unwrap()),
+                body: Some(response.text().unwrap_or_default()),
             }
         } else {
             Http {
                 length: response.content_length(),
                 status: response.status().as_u16(),
-                err: Some(response.text().unwrap()),
+                err: Some(response.text().unwrap_or_default()),
                 body: None,
             }
         }
@@ -117,7 +117,7 @@ pub mod http {
 
     #[rhai_fn(global, pure, return_raw, name = "json")]
     pub fn json(res: &mut Http) -> Result<Map, Box<EvalAltResult>> {
-        let body = str!(res.body.clone().unwrap());
+        let body = str!(res.body.clone().unwrap_or_default());
         match serde_json::from_str(body) {
             Ok(map) => Ok(map),
             Err(err) => Err(err.to_string().into()),

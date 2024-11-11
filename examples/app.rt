@@ -6,9 +6,9 @@ hello {
    response("Hello World!", "text", 200)
 }
 
-#[route("/example")]
+#[route("/:3")]
 example() {
-   html(http::get("https://example.org").body)
+   proxy(http::get("https://example.org").body)
 }
 
 #[route("/long"), cfg(wildcard = true)]
